@@ -1,0 +1,19 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: unittest (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    # The client must run on old image-built LinuxCNC distros, so the matrix
+    # reaches back to ancient interpreters via containers (decision G1).
+    container: python:${{ matrix.python }}-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.6", "3.8", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests (stdlib only — no pip install at all)
+        run: python -m unittest discover -s tests -v

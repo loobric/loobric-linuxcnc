@@ -1,0 +1,141 @@
+# MIT License
+# Copyright (c) 2025 sliptonic
+# SPDX-License-Identifier: MIT
+
+"""Tool table parse/generate round-trip tests (stdlib unittest only).
+
+Assumptions:
+- smooth_linuxcnc.py is a single stdlib-only file importable from repo root
+- parse_tool_table/generate_tool_table round-trip losslessly
+- Parse errors carry line numbers; duplicate tool numbers are errors
+"""
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import smooth_linuxcnc as sl
+
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample.tbl")
+
+
+class TestParse(unittest.TestCase):
+
+    def test_parse_fixture(self):
+        with open(FIXTURE) as f:
+            tools = sl.parse_tool_table(f.read())
+        self.assertEqual([t["tool_number"] for t in tools], [1, 3, 10, 22])
+        t3 = tools[1]
+        self.assertEqual(t3["pocket"], 3)
+        self.assertAlmostEqual(t3["diameter"], 6.35)
+        self.assertAlmostEqual(t3["z_offset"], -48.25)
+        self.assertAlmostEqual(t3["x_offset"], 1.5)
+        self.assertEqual(t3["comment"], "1/4 downcut")
+        t22 = tools[3]
+        self.assertAlmostEqual(t22["u_offset"], 0.1)
+        self.assertAlmostEqual(t22["front_angle"], 45.0)
+
+    def test_round_trip_is_lossless(self):
+        with open(FIXTURE) as f:
+            original = f.read()
+        tools = sl.parse_tool_table(original)
+        regenerated = sl.generate_tool_table(tools)
+        self.assertEqual(sl.parse_tool_table(regenerated), tools)
+        # And generation is stable (idempotent on its own output)
+        self.assertEqual(sl.generate_tool_table(sl.parse_tool_table(regenerated)), regenerated)
+
+    def test_missing_tool_number_is_error(self):
+        with self.assertRaises(sl.ToolTableError):
+            sl.parse_tool_table("P1 D+5.0 Z-1.0 ;no tool number")
+
+    def test_duplicate_tool_number_is_error(self):
+        with self.assertRaises(sl.ToolTableError):
+            sl.parse_tool_table("T1 P1 Z-1.0\nT1 P2 Z-2.0")
+
+    def test_blank_and_comment_lines_skipped(self):
+        tools = sl.parse_tool_table("\n;just a comment\n\nT7 P7 Z-1.000000\n")
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0]["tool_number"], 7)
+
+
+class TestEntryMapping(unittest.TestCase):
+    """Mapping a parsed tool to a server ToolTableEntry payload.
+
+    Assumptions (mirrors smooth-core's #4 contract):
+    - tool_number, pocket, description from T/P/;comment
+    - offsets carries z/x/y/diameter with per-key units
+    - provenance marks offset fields as "machine" (values came from the
+      controller)
+    - extra.linuxcnc preserves the raw line and ALL parsed params (lossless)
+    """
+
+    def test_entry_payload_shape(self):
+        line = "T3 P3 D+6.350000 Z-48.250000 X+1.500000 ;1/4 downcut"
+        tool = sl.parse_tool_table(line)[0]
+        entry = sl.tool_to_entry(tool, units="mm")
+
+        self.assertEqual(entry["tool_number"], 3)
+        self.assertEqual(entry["pocket"], 3)
+        self.assertEqual(entry["description"], "1/4 downcut")
+        self.assertAlmostEqual(entry["offsets"]["z"], -48.25)
+        self.assertEqual(entry["offsets"]["z_unit"], "mm")
+        self.assertAlmostEqual(entry["offsets"]["diameter"], 6.35)
+        self.assertEqual(entry["provenance"]["offsets.z"], "machine")
+        self.assertIn("raw", entry["extra"]["linuxcnc"])
+        self.assertEqual(entry["extra"]["linuxcnc"]["params"]["x_offset"], 1.5)
+
+    def test_lathe_params_preserved_in_extra(self):
+        line = "T22 P22 Z-60.1 U+0.1 I+45.0 Q3 ;lathe"
+        tool = sl.parse_tool_table(line)[0]
+        entry = sl.tool_to_entry(tool, units="mm")
+        params = entry["extra"]["linuxcnc"]["params"]
+        self.assertAlmostEqual(params["u_offset"], 0.1)
+        self.assertAlmostEqual(params["front_angle"], 45.0)
+        self.assertEqual(params["orientation"], 3)
+
+
+class TestConfig(unittest.TestCase):
+
+    def test_parse_shell_style_config(self):
+        text = '\n'.join([
+            '# comment',
+            'SMOOTH_API_URL="http://nas.local:8000"',
+            "SMOOTH_API_KEY='secret'",
+            'MACHINE_NAME=mill01',
+            '',
+        ])
+        cfg = sl.parse_config(text)
+        self.assertEqual(cfg["SMOOTH_API_URL"], "http://nas.local:8000")
+        self.assertEqual(cfg["SMOOTH_API_KEY"], "secret")
+        self.assertEqual(cfg["MACHINE_NAME"], "mill01")
+
+    def test_find_tool_table_from_ini(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ini = os.path.join(d, "mill.ini")
+            with open(ini, "w") as f:
+                f.write("[EMCIO]\nTOOL_TABLE = tool.tbl\n")
+            with open(os.path.join(d, "tool.tbl"), "w") as f:
+                f.write("T1 P1 Z-1.0\n")
+            path = sl.find_tool_table(ini)
+            self.assertEqual(path, os.path.join(d, "tool.tbl"))
+
+
+class TestBackup(unittest.TestCase):
+
+    def test_backup_creates_timestamped_copy(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "tool.tbl")
+            with open(src, "w") as f:
+                f.write("T1 P1 Z-1.0\n")
+            backup = sl.backup_tool_table(src, d)
+            self.assertTrue(os.path.exists(backup))
+            self.assertNotEqual(backup, src)
+            with open(backup) as f:
+                self.assertEqual(f.read(), "T1 P1 Z-1.0\n")
+
+
+if __name__ == "__main__":
+    unittest.main()
