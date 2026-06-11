@@ -4,14 +4,18 @@
 
 ## What it does
 
-`smooth_linuxcnc.py` reads your machine's tool table (`.tbl`) and pushes it to a
-Smooth server as that machine's tool-table entries — tool numbers, pockets,
-offsets, and comments, with the raw table line preserved losslessly. Entries
-arrive **unbound**; pairing them with your CAM-side tool records happens on the
-server (review inbox), never by guesswork on the control box.
+`smooth_linuxcnc.py sync` keeps your machine's tool table (`.tbl`) and a Smooth
+server in step, both directions:
 
-Pulling server-side changes back into the tool table (the closed sync loop) is
-the next milestone — see the [roadmap](https://github.com/loobric/smooth-core/blob/main/ROADMAP.md).
+- **Machine → server:** tool numbers, pockets, offsets, comments — raw table
+  lines preserved losslessly. A touch-off at the machine reaches your CAM-side
+  tool record on the next sync, with provenance.
+- **Server → machine:** changes to **bound** entries are written back into the
+  table — line-surgically (your comments survive), with a timestamped backup
+  first. Unbound entries never write back.
+- **Never a guess:** entries pair with CAM tool records on the server (review
+  inbox), and a tool changed on *both* sides between syncs is reported as a
+  conflict touching neither — resolve by re-editing one side.
 
 ## Design constraints (why this is one file)
 
@@ -50,11 +54,11 @@ LINUXCNC_INI="/home/user/linuxcnc/configs/mill/mill.ini"   # tool table found vi
 
 Environment variables with the same names override the file.
 
-### 3. Push
+### 3. Sync
 
 ```bash
-./smooth_linuxcnc.py push            # uses MACHINE_NAME from config
-./smooth_linuxcnc.py push mill01     # or name the machine explicitly
+./smooth_linuxcnc.py sync            # full cycle: push + pull (use this)
+./smooth_linuxcnc.py push            # one-way, table -> server only
 ```
 
 ```
@@ -70,7 +74,7 @@ The machine is created on the server on first contact.
 ```bash
 crontab -e
 # every 5 minutes; safe even when the server is down
-*/5 * * * * /home/user/smooth_linuxcnc.py push >> /tmp/smooth-sync.log 2>&1
+*/5 * * * * /home/user/smooth_linuxcnc.py sync >> /tmp/smooth-sync.log 2>&1
 ```
 
 ## Tool table format
