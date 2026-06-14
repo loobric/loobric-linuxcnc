@@ -386,17 +386,25 @@ def push_tool_table(config):
         % (len(entries), table_path, machine_name))
     try:
         machine_id = _ensure_machine(base_url, api_key, machine_name)
+        # This reads the COMPLETE tool.tbl, so it is a full snapshot: the
+        # server reconciles away entries the operator deleted locally. (The
+        # two-way sync path sends deltas and must NOT use snapshot mode.)
         result = http_json(
             "PUT",
             "%s/api/v1/machines/%s/tool-table" % (base_url, machine_id),
             api_key,
-            body={"items": entries},
+            body={"items": entries, "mode": "snapshot"},
         )
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0  # benign: never block the machine
 
     log("Pushed %s entries" % result.get("success_count"))
+    removed = result.get("removed_tool_numbers") or []
+    if removed:
+        log("Reconciled %d entr%s removed locally: T%s"
+            % (len(removed), "ies" if len(removed) != 1 else "y",
+               ", T".join(str(n) for n in removed)))
     for error in result.get("errors", []):
         log("Server rejected item %s: %s" % (error.get("index"), error.get("message")))
     return 0
