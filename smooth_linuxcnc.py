@@ -509,6 +509,12 @@ def sync_tool_table(config):
     - server changed only + BOUND  -> write back to .tbl (backup first)
     - server changed only, unbound -> leave the table alone
     - both changed                 -> CONFLICT: log loudly, touch neither
+    - gone locally, was synced     -> delete on the server (the operator
+                                      removed it from the controller's table)
+    - gone locally + changed on
+      the server                   -> CONFLICT: touch neither
+    - on the server, never synced  -> server-side addition; left for the
+                                      operator (pull direction, not automatic)
     First sync (no state) pushes everything and records state.
     Returns 0 on success/benign failure, 2 on config errors.
 
@@ -614,6 +620,41 @@ def sync_tool_table(config):
         local_lines = {t["tool_number"]: generate_tool_table_line(t)
                        for t in local_tools.values()}
 
+    # Tools the server still has but that vanished from the local table.
+    # The last-synced baseline tells a deletion apart from a server-side add:
+    #   in `known`     -> operator deleted it locally  -> delete on the server
+    #   not in `known` -> a server-side addition        -> pull direction,
+    #                     never auto-written into the local table here
+    to_delete = []
+    for n in sorted(set(server) - set(local_tools)):
+        key = str(n)
+        if key not in known:
+            log("Server has T%d for this machine but it is not in the local "
+                "table - not added automatically" % n)
+            continue
+        # delete-vs-edit: if the server copy changed since our last sync, this
+        # is a real conflict - never silently clobber a server-side edit.
+        if _entry_fields(server[n]) != known[key].get("server_fields"):
+            conflicts.append(n)
+            log("CONFLICT: T%d deleted locally but changed on the server - "
+                "touching neither. Resolve by re-editing or re-deleting." % n)
+            continue
+        to_delete.append(n)
+
+    if to_delete:
+        try:
+            result = http_json(
+                "DELETE", "%s/api/v1/machines/%s/tool-table" % (base_url, machine_id),
+                api_key, body={"tool_numbers": to_delete})
+        except ServerUnreachable as e:
+            log("Server not reachable mid-sync, will retry: %s" % e)
+            return 0
+        for error in result.get("errors", []):
+            log("Server rejected delete %s: %s" % (error.get("index"),
+                                                   error.get("message")))
+        log("Removed %d tool(s) deleted locally: T%s"
+            % (len(to_delete), ", T".join(str(n) for n in to_delete)))
+
     # record the new baseline (conflicted tools keep their OLD baseline so
     # they are re-detected next sync)
     new_tools = {}
@@ -630,11 +671,7 @@ def sync_tool_table(config):
         }
     _save_state(state_file, {"tools": new_tools})
 
-    for n in sorted(set(server) - set(local_tools)):
-        log("Server has T%d for this machine but it is not in the local "
-            "table - not added automatically" % n)
-
-    if not to_push and not to_write and not conflicts:
+    if not to_push and not to_write and not to_delete and not conflicts:
         log("In sync - nothing to do")
     return 0
 

@@ -77,6 +77,12 @@ class FakeServer:
                                        "tool_record_id": item.get("tool_record_id")}
                 out.append(self.entries[n])
             return {"success_count": len(out), "errors": [], "items": out}
+        if method == "DELETE" and url.endswith("/api/v1/machines/m-1/tool-table"):
+            removed = 0
+            for n in body["tool_numbers"]:
+                if self.entries.pop(n, None) is not None:
+                    removed += 1
+            return {"success_count": removed, "errors": [], "items": []}
         raise AssertionError("unexpected: %s %s" % (method, url))
 
 
@@ -170,6 +176,57 @@ class SyncCycleTest(unittest.TestCase):
             raise sl.ServerUnreachable("down")
         with mock.patch.object(sl, "http_json", dead):
             self.assertEqual(sl.sync_tool_table(self.cfg), 0)
+
+    def test_local_delete_removes_entry_on_server(self):
+        """The operator removed a tool from tool.tbl: the next sync deletes it
+        on the server instead of leaving a phantom (smooth-core#17)."""
+        self.run_sync()
+        self.assertEqual(sorted(self.server.entries), [3, 5])
+        # operator deletes T3 from the controller's table
+        with open(self.tbl, "w") as f:
+            f.write("T5 P5 D+5.000000 Z-50.000000 ;5mm drill\n")
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            code = sl.sync_tool_table(self.cfg)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(self.server.entries), [5])  # T3 gone
+        self.assertTrue(any("Removed" in m and "T3" in m for m in logs))
+        # converges: a second sync is a clean no-op (state forgot T3)
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            sl.sync_tool_table(self.cfg)
+        self.assertEqual(sorted(self.server.entries), [5])
+
+    def test_local_delete_vs_server_edit_is_conflict(self):
+        """A tool deleted locally but edited on the server is a real conflict:
+        touch neither side (never silently clobber the server edit)."""
+        self.run_sync()
+        self.server.set_offset(3, "z", -48.009)  # server edited T3
+        with open(self.tbl, "w") as f:            # operator deleted T3 locally
+            f.write("T5 P5 D+5.000000 Z-50.000000 ;5mm drill\n")
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            sl.sync_tool_table(self.cfg)
+        self.assertIn(3, self.server.entries)  # NOT deleted
+        self.assertTrue(any("CONFLICT" in m and "T3" in m for m in logs))
+
+    def test_server_only_entry_never_synced_is_not_deleted(self):
+        """A tool present on the server but never in our local table/baseline
+        is a server-side addition, not a local deletion — left untouched."""
+        self.run_sync()  # baseline now knows T3, T5
+        # A third tool appears on the server that we never had locally.
+        self.server.entries[9] = {"tool_number": 9, "id": "e-9", "version": 1,
+                                  "machine_id": "m-1", "tool_record_id": None,
+                                  "offsets": {"z": -1.0}, "pocket": 9,
+                                  "description": "mystery"}
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            sl.sync_tool_table(self.cfg)
+        self.assertIn(9, self.server.entries)  # not deleted
+        self.assertTrue(any("not added automatically" in m and "T9" in m for m in logs))
 
 
 if __name__ == "__main__":
