@@ -570,14 +570,27 @@ def sync_tool_table(config):
     for n in sorted(local_tools):
         key = str(n)
         last = known.get(key, {})
-        local_changed = local_lines[n] != last.get("local_line")
         entry = server.get(n)
-        server_changed = entry is not None and \
-            _entry_fields(entry) != last.get("server_fields")
 
-        if entry is None:
-            local_changed = True  # never seen by server: push
-            server_changed = False
+        if key not in known and entry is not None:
+            # First contact with no baseline, but the server ALREADY has this
+            # tool (e.g. created by an earlier push, then bound on the server).
+            # A missing baseline is not evidence of a change: compare the
+            # syncable fields. If they already agree we are in sync and simply
+            # adopt the baseline; only a genuine content divergence — which we
+            # have no history to arbitrate — is a conflict. (Without this, a
+            # first sync after a push flags EVERY row as a false conflict.)
+            agree = _entry_fields(entry) == \
+                _entry_fields(tool_to_entry(local_tools[n], units=units))
+            local_changed = not agree
+            server_changed = not agree
+        else:
+            local_changed = local_lines[n] != last.get("local_line")
+            server_changed = entry is not None and \
+                _entry_fields(entry) != last.get("server_fields")
+            if entry is None:
+                local_changed = True  # never seen by server: push
+                server_changed = False
 
         if local_changed and server_changed:
             conflicts.append(n)

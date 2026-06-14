@@ -177,6 +177,45 @@ class SyncCycleTest(unittest.TestCase):
         with mock.patch.object(sl, "http_json", dead):
             self.assertEqual(sl.sync_tool_table(self.cfg), 0)
 
+    def seed_server_from_local(self, bind=False):
+        """Simulate the server already holding this table (an earlier push),
+        optionally with every entry bound — but with NO local sync state."""
+        for t in sl.parse_tool_table(self.read_tbl()):
+            item = sl.tool_to_entry(t, units="mm")
+            n = item["tool_number"]
+            self.server.entries[n] = {**item, "id": "e-%d" % n, "version": 1,
+                                      "machine_id": "m-1",
+                                      "tool_record_id": ("rec-%d" % n) if bind else None}
+
+    def test_first_sync_when_server_already_has_bound_entries_is_in_sync(self):
+        """Controller pushed earlier (no sync state), records were created and
+        bound on the server. The FIRST sync must NOT flag every row as a
+        conflict — local and server agree, so it's a clean no-op."""
+        self.seed_server_from_local(bind=True)
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            code = sl.sync_tool_table(self.cfg)
+        self.assertEqual(code, 0)
+        self.assertFalse(any("CONFLICT" in m for m in logs), logs)
+        self.assertTrue(any("In sync" in m for m in logs))
+        self.assertEqual(self.server.puts, 0)       # nothing pushed
+        self.assertEqual(self.read_tbl(), TBL)      # nothing written
+        # the bindings survive (we never touched the entries)
+        self.assertTrue(all(e["tool_record_id"] for e in self.server.entries.values()))
+
+    def test_first_contact_genuine_divergence_is_still_a_conflict(self):
+        """No baseline AND the fields actually differ: that we cannot
+        arbitrate, so it stays a conflict — but only for the row that differs."""
+        self.seed_server_from_local(bind=True)
+        self.server.set_offset(3, "z", -47.0)  # server's T3 edited before first sync
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            sl.sync_tool_table(self.cfg)
+        self.assertTrue(any("CONFLICT" in m and "T3" in m for m in logs))
+        self.assertFalse(any("CONFLICT" in m and "T5" in m for m in logs))  # T5 agreed
+
     def test_local_delete_removes_entry_on_server(self):
         """The operator removed a tool from tool.tbl: the next sync deletes it
         on the server instead of leaving a phantom (smooth-core#17)."""
