@@ -65,6 +65,15 @@ class ServerUnreachable(Exception):
     """The Smooth server could not be reached (benign for cron)."""
 
 
+class ServerError(Exception):
+    """The server returned an HTTP error (reachable, but the request failed).
+    Distinct from ServerUnreachable so a 404 (e.g. our machine was deleted) is
+    detectable and a real rejection isn't silently logged as 'unreachable'."""
+    def __init__(self, code, message):
+        self.code = code
+        super().__init__(message)
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -378,7 +387,7 @@ def http_json(method, url, api_key, body=None, timeout=HTTP_TIMEOUT):
             detail = e.read().decode("utf-8")[:300]
         except Exception:
             pass
-        raise ServerUnreachable("HTTP %d from %s: %s" % (e.code, url, detail))
+        raise ServerError(e.code, "HTTP %d from %s: %s" % (e.code, url, detail))
     except (urllib.error.URLError, socket.timeout, OSError) as e:
         raise ServerUnreachable("cannot reach %s: %s" % (url, e))
 
@@ -397,7 +406,19 @@ def _ensure_machine(base_url, api_key, name, state, state_file):
     """
     machine_id = state.get("machine_id")
     if machine_id:
-        return machine_id
+        # Verify it still exists: it may have been deleted in the UI, or the
+        # server DB reset. A stale id would silently push slots into a ghost
+        # machine the UI can't show. (A network error propagates as benign.)
+        try:
+            http_json("GET", "%s/api/v1/machine-records/%s" % (base_url, machine_id),
+                      api_key)
+            return machine_id
+        except ServerError as e:
+            if e.code != 404:
+                raise
+            log("Stored machine %s is gone from the server; re-registering."
+                % machine_id)
+            machine_id = None
     created = http_json("POST", base_url + "/api/v1/machine-records", api_key,
                         body={})
     machine_id = created["internal"]["id"]
@@ -487,6 +508,9 @@ def push_tool_table(config):
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0  # benign: never block the machine
+    except ServerError as e:
+        log("ERROR: server rejected the push (HTTP %s): %s" % (e.code, e))
+        return 0  # cron-safe: surfaced, but never block the machine
 
     log("Pushed %d entries" % len(result.get("items", [])))
     removed = result.get("removed_tool_numbers") or []
@@ -626,6 +650,9 @@ def sync_tool_table(config):
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0
+    except ServerError as e:
+        log("ERROR: server rejected the sync (HTTP %s): %s" % (e.code, e))
+        return 0
 
     to_push = []
     to_write = {}
@@ -682,6 +709,9 @@ def sync_tool_table(config):
         except ServerUnreachable as e:
             log("Server not reachable mid-sync, will retry: %s" % e)
             return 0
+        except ServerError as e:
+            log("ERROR: server rejected the sync (HTTP %s): %s" % (e.code, e))
+            return 0
         for error in result.get("errors", []):
             log("Server rejected item %s: %s" % (error.get("index"),
                                                  error.get("message")))
@@ -733,6 +763,9 @@ def sync_tool_table(config):
                                 keep, mode="snapshot")
         except ServerUnreachable as e:
             log("Server not reachable mid-sync, will retry: %s" % e)
+            return 0
+        except ServerError as e:
+            log("ERROR: server rejected the sync (HTTP %s): %s" % (e.code, e))
             return 0
         for error in result.get("errors", []):
             log("Server rejected delete %s: %s" % (error.get("index"),

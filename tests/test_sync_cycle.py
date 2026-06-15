@@ -132,6 +132,11 @@ class FakeServer:
                     "canonical": {"name": {"value": body["value"],
                                            "source": "asserted:linuxcnc"}},
                     "clients": {}}
+        if method == "GET" and "/api/v1/machine-records/" in url:
+            if url.rstrip("/").endswith(self.machine_id):
+                return {"internal": {"id": self.machine_id, "version": 1},
+                        "canonical": {}, "clients": {}}
+            raise sl.ServerError(404, "not found")
         if method == "GET" and "/api/v1/tool-table-entry-records" in url:
             return {"items": list(self.entries.values())}
         if method == "POST" and url.endswith("/tool-table-entry-records/sync"):

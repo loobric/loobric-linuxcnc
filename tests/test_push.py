@@ -79,6 +79,11 @@ class TestPushFlow(unittest.TestCase):
                         "canonical": {"name": {"value": body["value"],
                                                "source": "asserted:linuxcnc"}},
                         "clients": {}}
+            if method == "GET" and "/api/v1/machine-records/" in url:
+                if url.rstrip("/").endswith("m-1"):
+                    return {"internal": {"id": "m-1", "version": 1},
+                            "canonical": {}, "clients": {}}
+                raise sl.ServerError(404, "not found")
             if method == "POST" and url.endswith("/api/v1/tool-table-entry-records/sync"):
                 self.assertEqual(body["mode"], "snapshot")
                 self.assertEqual(body["machine_id"], "m-1")
@@ -128,6 +133,8 @@ class TestPushFlow(unittest.TestCase):
             calls.append((method, url))
             if url.endswith("/machine-records") or url.endswith("/assert"):
                 raise AssertionError("should not re-create machine: %s" % url)
+            if method == "GET" and "/machine-records/" in url:   # verify it still exists
+                return {"internal": {"id": "m-7"}, "canonical": {}, "clients": {}}
             if url.endswith("/sync"):
                 self.assertEqual(body["machine_id"], "m-7")
                 return {"items": [], "removed_tool_numbers": []}
@@ -135,7 +142,33 @@ class TestPushFlow(unittest.TestCase):
 
         with mock.patch.object(sl, "http_json", second):
             self.assertEqual(sl.push_tool_table(self.cfg), 0)
-        self.assertEqual([c[0] for c in calls], ["POST"])  # only /sync
+        self.assertEqual([c[0] for c in calls], ["GET", "POST"])  # verify, then /sync
+
+    def test_recreates_machine_when_stored_id_is_gone(self):
+        """The stored machine was deleted (UI) or the DB reset: a stale id would
+        push slots into a ghost machine the UI can't show. The client detects the
+        404 and re-registers, so the table lands under a LIVE machine."""
+        state_file = sl._state_path(self.cfg, self.cfg["MACHINE_NAME"])
+        sl._save_state(state_file, {"machine_id": "m-dead", "tools": {}})
+        calls = []
+
+        def http(method, url, api_key, body=None, timeout=10):
+            calls.append((method, url))
+            if method == "GET" and url.endswith("/machine-records/m-dead"):
+                raise sl.ServerError(404, "not found")           # the ghost machine
+            if method == "POST" and url.endswith("/machine-records"):
+                return {"internal": {"id": "m-new"}, "canonical": {}, "clients": {}}
+            if url.endswith("/assert"):
+                return {"internal": {"id": "m-new"}, "canonical": {}, "clients": {}}
+            if url.endswith("/sync"):
+                self.assertEqual(body["machine_id"], "m-new")    # synced under the LIVE machine
+                return {"items": [], "removed_tool_numbers": []}
+            raise AssertionError(url)
+
+        with mock.patch.object(sl, "http_json", http):
+            self.assertEqual(sl.push_tool_table(self.cfg), 0)
+        self.assertTrue(calls[0][1].endswith("/machine-records/m-dead"))   # verified the ghost
+        self.assertTrue(any(u.endswith("/machine-records") for _, u in calls))  # re-created
 
     def test_snapshot_reconcile_removes_are_logged(self):
         logs = []
