@@ -3,21 +3,25 @@
 # SPDX-License-Identifier: MIT
 
 """
-Tests for the full sync cycle (smooth-linuxcnc#2) — the pull path that
-closes the wear-offset loop.
+Tests for the full sync cycle (smooth-linuxcnc#2) - the pull path that
+closes the wear-offset loop, retargeted to the v2 sectioned schema.
 
 The contract under test (stdlib unittest, one stubbed HTTP seam):
-- 3-way per tool via the state file: local-only change pushes,
-  server-only change on a BOUND entry writes back to the .tbl
-  (timestamped backup first), both-changed is a reported conflict that
-  touches NEITHER side
-- unbound entries never write back; comments/blank lines in the .tbl
-  survive verbatim (line-surgical writes)
-- idempotent: a second sync with no changes makes no HTTP write and no
-  file write (change-detection short-circuit)
+- the client creates+names a MachineRecord on first run and persists the
+  server internal.id in the state file (reused thereafter)
+- 3-way per tool via the state file: local-only change pushes (mode=merge),
+  server-only change on a BOUND entry (canonical.bound_instance_id not null)
+  writes back to the .tbl (timestamped backup first), both-changed is a
+  reported conflict that touches NEITHER side
+- unbound entries never write back; comments/blank lines in the .tbl survive
+  verbatim (line-surgical writes)
+- a local deletion propagates as a snapshot /sync that omits the removed
+  slot, so the server reconciles it away (removed_tool_numbers); a
+  server-side-only addition is never reconciled
+- idempotent: a second sync with no changes makes no HTTP write and no file
+  write (change-detection short-circuit)
 - benign failure: unreachable server logs and exits 0
 """
-import json
 import os
 import sys
 import tempfile
@@ -36,53 +40,128 @@ T5 P5 D+5.000000 Z-50.000000 ;5mm drill
 
 
 class FakeServer:
-    """In-memory machine + tool-table honoring the facade contract."""
+    """In-memory MachineRecord + ToolTableEntryRecords in the v2 sectioned
+    shape. Models exactly the three endpoints the client uses:
+    machine create + name-assert, the /sync push (snapshot|merge) returning
+    items + removed_tool_numbers, and the GET returning sectioned entries.
+    """
 
     def __init__(self):
-        self.machine = {"id": "m-1", "name": "mill01"}
-        self.entries = {}  # tool_number -> entry
-        self.puts = 0
+        self.machine_id = "m-1"
+        self.machine_name = "mill01"
+        self.entries = {}  # tool_number -> sectioned entry
+        self.syncs = 0
 
-    def entry(self, tool_number):
-        return self.entries[tool_number]
+    # --- helpers the tests drive -------------------------------------------
 
-    def bind(self, tool_number, record_id="rec-1"):
-        self.entries[tool_number]["tool_record_id"] = record_id
+    def _src(self):
+        return "observed:linuxcnc@%s" % self.machine_name
 
-    def set_offset(self, tool_number, key, value):
-        e = self.entries[tool_number]
-        e["offsets"] = dict(e["offsets"], **{key: value})
-        e["version"] += 1
+    def _make_entry(self, slot, bound_id=None):
+        n = slot["tool_number"]
+        offsets = {}
+        for key in ("z", "x", "y", "diameter"):
+            if slot["offsets"].get(key) is not None:
+                offsets[key] = {"value": slot["offsets"][key],
+                                "unit": slot["offsets"].get(key + "_unit"),
+                                "source": self._src()}
+        bound = ({"value": bound_id, "source": "asserted:human@inbox"}
+                 if bound_id else {"value": None, "source": "unknown"})
+        return {
+            "internal": {"id": "e-%d" % n, "machine_id": self.machine_id,
+                         "version": 1, "created_at": "t", "updated_at": "t"},
+            "canonical": {
+                "tool_number": {"value": n, "source": self._src()},
+                "bound_instance_id": bound,
+                "offsets": offsets,
+            },
+            "clients": {"linuxcnc": {
+                "client_version": slot.get("client_version", sl.CLIENT_VERSION),
+                "client_item_id": slot.get("client_item_id"),
+                "created_at": "t", "updated_at": "t",
+                "data": slot.get("data", {}),
+            }},
+        }
+
+    def server_only_entry(self, n, z=None):
+        """A slot present on the server with NO linuxcnc client section
+        (e.g. created by another client) - the client must never delete it."""
+        offsets = {}
+        if z is not None:
+            offsets["z"] = {"value": z, "unit": "mm", "source": self._src()}
+        return {
+            "internal": {"id": "e-%d" % n, "machine_id": self.machine_id,
+                         "version": 1, "created_at": "t", "updated_at": "t"},
+            "canonical": {
+                "tool_number": {"value": n, "source": self._src()},
+                "bound_instance_id": {"value": None, "source": "unknown"},
+                "offsets": offsets,
+            },
+            "clients": {},
+        }
+
+    def entry(self, n):
+        return self.entries[n]
+
+    def offset(self, n, key):
+        return self.entries[n]["canonical"]["offsets"][key]["value"]
+
+    def is_bound(self, n):
+        return self.entries[n]["canonical"]["bound_instance_id"]["value"] is not None
+
+    def bind(self, n, instance_id="inst-1"):
+        e = self.entries[n]
+        e["canonical"]["bound_instance_id"] = {"value": instance_id,
+                                               "source": "asserted:human@inbox"}
+
+    def set_offset(self, n, key, value):
+        e = self.entries[n]
+        e["canonical"]["offsets"][key] = {"value": value, "unit": "mm",
+                                          "source": self._src()}
+        e["internal"]["version"] += 1
+
+    # --- the wire ----------------------------------------------------------
 
     def http(self, method, url, api_key, body=None, timeout=10):
-        if method == "GET" and url.endswith("/api/v1/machines"):
-            return {"items": [self.machine]}
-        if method == "GET" and url.endswith("/api/v1/machines/m-1/tool-table"):
+        if method == "POST" and url.endswith("/api/v1/machine-records"):
+            return {"internal": {"id": self.machine_id, "version": 1},
+                    "canonical": {}, "clients": {}}
+        if method == "POST" and url.endswith("/assert"):
+            self.machine_name = body["value"]
+            return {"internal": {"id": self.machine_id},
+                    "canonical": {"name": {"value": body["value"],
+                                           "source": "asserted:linuxcnc"}},
+                    "clients": {}}
+        if method == "GET" and "/api/v1/tool-table-entry-records" in url:
             return {"items": list(self.entries.values())}
-        if method == "PUT" and url.endswith("/api/v1/machines/m-1/tool-table"):
-            self.puts += 1
+        if method == "POST" and url.endswith("/tool-table-entry-records/sync"):
+            self.syncs += 1
+            mode = body.get("mode", "merge")
+            seen = set()
             out = []
-            for item in body["items"]:
-                n = item["tool_number"]
+            for slot in body["slots"]:
+                n = slot["tool_number"]
+                seen.add(n)
                 if n in self.entries:
-                    current = self.entries[n]
-                    keep_binding = current.get("tool_record_id")
-                    current.update(item)
-                    if item.get("tool_record_id") is None and keep_binding:
-                        current["tool_record_id"] = keep_binding
-                    current["version"] += 1
+                    prev = self.entries[n]
+                    bound_id = prev["canonical"]["bound_instance_id"]["value"]
+                    new = self._make_entry(slot, bound_id=bound_id)
+                    new["internal"]["version"] = prev["internal"]["version"] + 1
+                    self.entries[n] = new
                 else:
-                    self.entries[n] = {**item, "id": "e-%d" % n,
-                                       "version": 1, "machine_id": "m-1",
-                                       "tool_record_id": item.get("tool_record_id")}
+                    self.entries[n] = self._make_entry(slot)
                 out.append(self.entries[n])
-            return {"success_count": len(out), "errors": [], "items": out}
-        if method == "DELETE" and url.endswith("/api/v1/machines/m-1/tool-table"):
-            removed = 0
-            for n in body["tool_numbers"]:
-                if self.entries.pop(n, None) is not None:
-                    removed += 1
-            return {"success_count": removed, "errors": [], "items": []}
+            removed = []
+            if mode == "snapshot":
+                # reconcile away only THIS client's slots that we omitted;
+                # server-side-only slots (no linuxcnc section) are untouched
+                for n in list(self.entries):
+                    if n in seen:
+                        continue
+                    if "linuxcnc" in self.entries[n].get("clients", {}):
+                        del self.entries[n]
+                        removed.append(n)
+            return {"items": out, "removed_tool_numbers": sorted(removed)}
         raise AssertionError("unexpected: %s %s" % (method, url))
 
 
@@ -115,12 +194,16 @@ class SyncCycleTest(unittest.TestCase):
         self.assertEqual(self.read_tbl(), TBL)  # pull changed nothing
         state_files = [n for n in os.listdir(self.dir) if "state" in n]
         self.assertEqual(len(state_files), 1)
+        # the machine_id is persisted for reuse next run
+        import json
+        with open(os.path.join(self.dir, state_files[0])) as f:
+            self.assertEqual(json.load(f)["machine_id"], "m-1")
 
     def test_idempotent_no_changes_no_writes(self):
         self.run_sync()
-        puts_before = self.server.puts
+        syncs_before = self.server.syncs
         self.run_sync()
-        self.assertEqual(self.server.puts, puts_before)  # short-circuit
+        self.assertEqual(self.server.syncs, syncs_before)  # short-circuit
         self.assertEqual(self.read_tbl(), TBL)
         self.assertEqual([n for n in os.listdir(self.dir) if n.endswith(".bak")], [])
 
@@ -129,7 +212,7 @@ class SyncCycleTest(unittest.TestCase):
         with open(self.tbl, "w") as f:
             f.write(TBL.replace("Z-48.250000", "Z-48.100000"))
         self.run_sync()
-        self.assertAlmostEqual(self.server.entry(3)["offsets"]["z"], -48.1)
+        self.assertAlmostEqual(self.server.offset(3, "z"), -48.1)
 
     def test_server_edit_on_bound_entry_writes_back_with_backup(self):
         self.run_sync()
@@ -144,9 +227,9 @@ class SyncCycleTest(unittest.TestCase):
         backups = [n for n in os.listdir(self.dir) if ".bak" in n]
         self.assertEqual(len(backups), 1)
         # and the cycle converges: next sync is a no-op
-        puts = self.server.puts
+        syncs = self.server.syncs
         self.run_sync()
-        self.assertEqual(self.server.puts, puts)
+        self.assertEqual(self.server.syncs, syncs)
 
     def test_server_edit_on_unbound_entry_never_writes_back(self):
         self.run_sync()
@@ -166,7 +249,7 @@ class SyncCycleTest(unittest.TestCase):
             code = sl.sync_tool_table(self.cfg)
         self.assertEqual(code, 0)
         self.assertIn("Z-48.300000", self.read_tbl())     # local kept
-        self.assertAlmostEqual(self.server.entry(3)["offsets"]["z"], -48.007)  # server kept
+        self.assertAlmostEqual(self.server.offset(3, "z"), -48.007)  # server kept
         self.assertTrue(any("CONFLICT" in m and "T3" in m for m in logs))
         # T5 unaffected: still syncs normally
         self.assertIn(5, self.server.entries)
@@ -179,18 +262,17 @@ class SyncCycleTest(unittest.TestCase):
 
     def seed_server_from_local(self, bind=False):
         """Simulate the server already holding this table (an earlier push),
-        optionally with every entry bound — but with NO local sync state."""
+        optionally with every entry bound - but with NO local sync state."""
         for t in sl.parse_tool_table(self.read_tbl()):
-            item = sl.tool_to_entry(t, units="mm")
-            n = item["tool_number"]
-            self.server.entries[n] = {**item, "id": "e-%d" % n, "version": 1,
-                                      "machine_id": "m-1",
-                                      "tool_record_id": ("rec-%d" % n) if bind else None}
+            slot = sl.tool_to_slot(t, "mill01", units="mm")
+            n = slot["tool_number"]
+            self.server.entries[n] = self.server._make_entry(
+                slot, bound_id=("inst-%d" % n) if bind else None)
 
     def test_first_sync_when_server_already_has_bound_entries_is_in_sync(self):
         """Controller pushed earlier (no sync state), records were created and
         bound on the server. The FIRST sync must NOT flag every row as a
-        conflict — local and server agree, so it's a clean no-op."""
+        conflict - local and server agree, so it's a clean no-op."""
         self.seed_server_from_local(bind=True)
         logs = []
         with mock.patch.object(sl, "http_json", self.server.http), \
@@ -199,14 +281,14 @@ class SyncCycleTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(any("CONFLICT" in m for m in logs), logs)
         self.assertTrue(any("In sync" in m for m in logs))
-        self.assertEqual(self.server.puts, 0)       # nothing pushed
-        self.assertEqual(self.read_tbl(), TBL)      # nothing written
+        self.assertEqual(self.server.syncs, 0)       # nothing pushed
+        self.assertEqual(self.read_tbl(), TBL)       # nothing written
         # the bindings survive (we never touched the entries)
-        self.assertTrue(all(e["tool_record_id"] for e in self.server.entries.values()))
+        self.assertTrue(all(self.server.is_bound(n) for n in self.server.entries))
 
     def test_first_contact_genuine_divergence_is_still_a_conflict(self):
         """No baseline AND the fields actually differ: that we cannot
-        arbitrate, so it stays a conflict — but only for the row that differs."""
+        arbitrate, so it stays a conflict - but only for the row that differs."""
         self.seed_server_from_local(bind=True)
         self.server.set_offset(3, "z", -47.0)  # server's T3 edited before first sync
         logs = []
@@ -218,7 +300,7 @@ class SyncCycleTest(unittest.TestCase):
 
     def test_local_delete_removes_entry_on_server(self):
         """The operator removed a tool from tool.tbl: the next sync deletes it
-        on the server instead of leaving a phantom (smooth-core#17)."""
+        on the server (snapshot reconcile) instead of leaving a phantom."""
         self.run_sync()
         self.assertEqual(sorted(self.server.entries), [3, 5])
         # operator deletes T3 from the controller's table
@@ -253,13 +335,10 @@ class SyncCycleTest(unittest.TestCase):
 
     def test_server_only_entry_never_synced_is_not_deleted(self):
         """A tool present on the server but never in our local table/baseline
-        is a server-side addition, not a local deletion — left untouched."""
+        is a server-side addition, not a local deletion - left untouched."""
         self.run_sync()  # baseline now knows T3, T5
         # A third tool appears on the server that we never had locally.
-        self.server.entries[9] = {"tool_number": 9, "id": "e-9", "version": 1,
-                                  "machine_id": "m-1", "tool_record_id": None,
-                                  "offsets": {"z": -1.0}, "pocket": 9,
-                                  "description": "mystery"}
+        self.server.entries[9] = self.server.server_only_entry(9, z=-1.0)
         logs = []
         with mock.patch.object(sl, "http_json", self.server.http), \
              mock.patch.object(sl, "log", logs.append):
@@ -268,18 +347,15 @@ class SyncCycleTest(unittest.TestCase):
         self.assertTrue(any("not added automatically" in m and "T9" in m for m in logs))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class BindingThenEditTest(SyncCycleTest):
-    """Regression (found live): confirming a binding bumps entry.version;
-    that must NOT make the next local touch-off a false conflict."""
+    """Regression (found live): confirming a binding bumps the record version;
+    that must NOT make the next local touch-off a false conflict (we detect
+    change on canonical offsets, never on version)."""
 
     def test_bind_between_syncs_then_local_edit_pushes_cleanly(self):
         self.run_sync()
-        self.server.bind(3)  # inbox confirm: version bumps, data unchanged
-        self.server.entries[3]["version"] += 1
+        self.server.bind(3)  # inbox confirm: version bumps, offsets unchanged
+        self.server.entries[3]["internal"]["version"] += 1
         with open(self.tbl, "w") as f:
             f.write(TBL.replace("Z-48.250000", "Z-48.137000"))
         logs = []
@@ -287,4 +363,8 @@ class BindingThenEditTest(SyncCycleTest):
              mock.patch.object(sl, "log", logs.append):
             sl.sync_tool_table(self.cfg)
         self.assertFalse(any("CONFLICT" in m for m in logs), logs)
-        self.assertAlmostEqual(self.server.entry(3)["offsets"]["z"], -48.137)
+        self.assertAlmostEqual(self.server.offset(3, "z"), -48.137)
+
+
+if __name__ == "__main__":
+    unittest.main()

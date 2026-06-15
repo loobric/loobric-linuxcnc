@@ -29,9 +29,16 @@ compatible with the v1 format), overridable via environment variables:
     LOG_DIR="/tmp/smooth-sync"         # optional log file location
 
 Tool table reference: http://wiki.linuxcnc.org/cgi-bin/wiki.pl?ToolTable
-Entries are pushed UNBOUND; binding tool-table rows to ToolRecords is the
-server's job (review inbox) or the user's (explicit bind). This script
+Entries are pushed UNBOUND; binding tool-table rows to ToolInstanceRecords is
+the server's job (review inbox) or the user's (explicit assert). This script
 never guesses identity (v2 decision G2).
+
+v2 sectioned schema (docs/TOOL_SCHEMA.md): this client only ever writes its
+own `clients.linuxcnc` section plus the few canonical fields a machine may
+OBSERVE (tool_number, offsets). It never sends `internal`/`canonical` keys;
+the server stamps provenance `observed:linuxcnc@<machine>` itself. Canonical
+offsets read back as `canonical.offsets.<key>.{value,unit,source}`, and a slot
+is "bound" when `canonical.bound_instance_id.value` is not null.
 """
 
 import json
@@ -46,6 +53,8 @@ import urllib.request
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/smooth/linuxcnc.conf")
 HTTP_TIMEOUT = 10  # seconds
+CLIENT_NAME = "linuxcnc"
+CLIENT_VERSION = "0.3.0"
 
 
 class ToolTableError(Exception):
@@ -190,44 +199,89 @@ def generate_tool_table(tools):
 
 
 # ---------------------------------------------------------------------------
-# Mapping to the Smooth API (smooth-core #4 contract)
+# Mapping to the Smooth API (v2 sectioned schema, /sync slots)
 # ---------------------------------------------------------------------------
 
+# canonical offset key  <-  local tool dict key
 _OFFSET_KEYS = [("z_offset", "z"), ("x_offset", "x"), ("y_offset", "y"),
                 ("diameter", "diameter")]
 
 
-def tool_to_entry(tool, units="mm"):
-    """Map a parsed tool to a ToolTableEntry upsert payload.
+def tool_to_slot(tool, machine_name, units="mm"):
+    """Map a parsed tool to a `slots` entry for the /sync call.
 
-    Assumptions:
-    - offsets carries z/x/y/diameter with per-key units
-    - provenance marks every offset field "machine" (the controller is the
-      source of these values)
-    - extra.linuxcnc preserves the raw canonical line plus ALL parsed
-      params so nothing is lost on round trip (plan principle 6)
-    - tool_record_id is intentionally absent: entries push unbound
+    A slot carries ONLY what a machine may legitimately state:
+    - `tool_number` and plain `offsets` (z/x/y/diameter + `<key>_unit`): the
+      observable canonical values. The server stamps them with provenance
+      `observed:linuxcnc@<machine>`; we never send `source`/`canonical`.
+    - `data`: the opaque, client-owned linuxcnc payload (the raw canonical
+      line + ALL parsed params) so nothing is lost on round trip. It becomes
+      `clients.linuxcnc.data` on the server.
+    - `client_item_id`: this client's stable handle for the slot, the server's
+      re-adoption fallback (§6). Binding is the server/inbox's job; we never
+      send a bound_instance_id.
     """
     offsets = {}
-    provenance = {}
     for src, dst in _OFFSET_KEYS:
         if tool.get(src) is not None:
             offsets[dst] = tool[src]
             offsets[dst + "_unit"] = units
-            provenance["offsets." + dst] = "machine"
 
     params = {k: v for k, v in tool.items() if k != "comment" and v is not None}
     return {
         "tool_number": tool["tool_number"],
-        "pocket": tool.get("pocket"),
-        "description": tool.get("comment") or None,
         "offsets": offsets,
-        "provenance": provenance,
-        "extra": {"linuxcnc": {
+        "data": {
             "raw": generate_tool_table_line(tool),
             "params": params,
-        }},
+        },
+        "client_item_id": "%s:T%d" % (machine_name, tool["tool_number"]),
     }
+
+
+def _entry_tool_number(entry):
+    """The slot number from a sectioned entry's canonical section."""
+    return entry["canonical"]["tool_number"]["value"]
+
+
+def _entry_bound(entry):
+    """True when the slot has a confirmed physical tool bound to it.
+
+    Replaces the old top-level `tool_record_id`: a slot is bound when
+    `canonical.bound_instance_id.value` is not null (asserted on the server).
+    Pull/write-back applies ONLY to bound slots.
+    """
+    field = (entry.get("canonical") or {}).get("bound_instance_id") or {}
+    return field.get("value") is not None
+
+
+def _entry_offsets(entry):
+    """The server-owned offset values flowing back from a sectioned entry.
+
+    Returns {canonical_key: value} (e.g. {"z": -48.25, "diameter": 6.35}),
+    skipping `unknown`/null fields. This is the ONLY server-side data the
+    table consumes, so it is also the change-detection key. Provenance/units
+    and version numbers are deliberately ignored: a binding confirmation or
+    other metadata write bumps the record version without touching offsets,
+    and treating that as a change made a confirm look like a conflict (found
+    live).
+    """
+    result = {}
+    offsets = (entry.get("canonical") or {}).get("offsets") or {}
+    for key, field in offsets.items():
+        if field is not None and field.get("value") is not None:
+            result[key] = field["value"]
+    return result
+
+
+def _local_offsets(tool):
+    """The same {canonical_key: value} shape derived from a local tool dict,
+    so a server entry and a local row can be compared field-for-field."""
+    result = {}
+    for src, dst in _OFFSET_KEYS:
+        if tool.get(src) is not None:
+            result[dst] = tool[src]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -327,32 +381,48 @@ def http_json(method, url, api_key, body=None, timeout=HTTP_TIMEOUT):
 # Push
 # ---------------------------------------------------------------------------
 
-def _ensure_machine(base_url, api_key, name):
-    """Find the machine by name, creating it on first contact."""
-    machines = http_json("GET", base_url + "/api/v1/machines", api_key)
-    for machine in machines.get("items", []):
-        if machine.get("name") == name:
-            return machine["id"]
-    created = http_json("POST", base_url + "/api/v1/machines", api_key, body={
-        "items": [{"name": name, "controller_type": "linuxcnc"}]
-    })
-    if created.get("success_count") != 1:
-        raise ServerUnreachable(
-            "could not create machine %r: %s" % (name, created.get("errors"))
-        )
-    log("Registered machine '%s' on server" % name)
-    return created["items"][0]["id"]
+def _ensure_machine(base_url, api_key, name, state, state_file):
+    """Return this machine's server id, creating+naming a MachineRecord on
+    first contact and PERSISTING its id in the state file.
 
-
-def push_tool_table(config):
-    """Push the local tool table to the server as (un)bound entries.
-
-    Returns a process exit code:
-    - 0: pushed, or benign failure (server unreachable) — cron-safe
-    - 2: usage/config error (missing settings, unreadable table)
+    v2 has no name lookup: the client owns the server->client back-reference
+    (§6). First run creates an empty MachineRecord, asserts its name, and
+    stores `internal.id` in the state file; every later run reuses that id.
     """
-    _init_log_file(config)
+    machine_id = state.get("machine_id")
+    if machine_id:
+        return machine_id
+    created = http_json("POST", base_url + "/api/v1/machine-records", api_key,
+                        body={})
+    machine_id = created["internal"]["id"]
+    http_json("POST", "%s/api/v1/machine-records/%s/assert" % (base_url, machine_id),
+              api_key,
+              body={"path": "name", "value": name, "actor": CLIENT_NAME})
+    state["machine_id"] = machine_id
+    _save_state(state_file, state)
+    log("Registered machine '%s' on server (id %s)" % (name, machine_id))
+    return machine_id
 
+
+def _sync_push(base_url, machine_id, machine_name, api_key, slots, mode):
+    """One /sync call. `mode` is 'snapshot' (full table; reconciles away
+    absent slots) or 'merge' (deltas; touches only the slots sent)."""
+    return http_json(
+        "POST", "%s/api/v1/tool-table-entry-records/sync" % base_url, api_key,
+        body={
+            "machine_id": machine_id,
+            "client": CLIENT_NAME,
+            "machine_name": machine_name,
+            "client_version": CLIENT_VERSION,
+            "mode": mode,
+            "force": False,
+            "slots": slots,
+        })
+
+
+def _resolve_inputs(config):
+    """Resolve (base_url, machine_name, table_path); return (.., None) or
+    (None, None, None, exit_code) on a usage/config error."""
     base_url = (config.get("SMOOTH_API_URL") or "").rstrip("/")
     machine_name = config.get("MACHINE_NAME")
     table_path = config.get("TOOL_TABLE")
@@ -361,12 +431,26 @@ def push_tool_table(config):
             table_path = find_tool_table(config["LINUXCNC_INI"])
         except (OSError, ToolTableError) as e:
             log("ERROR: %s" % e)
-            return 2
-
+            return None, None, None, 2
     if not base_url or not machine_name or not table_path:
         log("ERROR: SMOOTH_API_URL, MACHINE_NAME, and TOOL_TABLE (or "
             "LINUXCNC_INI) must be configured")
-        return 2
+        return None, None, None, 2
+    return base_url, machine_name, table_path, None
+
+
+def push_tool_table(config):
+    """Push the local tool table to the server as a full snapshot.
+
+    Returns a process exit code:
+    - 0: pushed, or benign failure (server unreachable) — cron-safe
+    - 2: usage/config error (missing settings, unreadable table)
+    """
+    _init_log_file(config)
+
+    base_url, machine_name, table_path, err = _resolve_inputs(config)
+    if err is not None:
+        return err
 
     try:
         with open(table_path) as f:
@@ -379,27 +463,26 @@ def push_tool_table(config):
         return 2
 
     units = config.get("UNITS", "mm")
-    entries = [tool_to_entry(t, units=units) for t in tools]
+    slots = [tool_to_slot(t, machine_name, units=units) for t in tools]
     api_key = config.get("SMOOTH_API_KEY", "")
+    state_file = _state_path(config, machine_name)
+    state = _load_state(state_file)
 
     log("Pushing %d tools from %s as machine '%s'"
-        % (len(entries), table_path, machine_name))
+        % (len(slots), table_path, machine_name))
     try:
-        machine_id = _ensure_machine(base_url, api_key, machine_name)
+        machine_id = _ensure_machine(base_url, api_key, machine_name,
+                                     state, state_file)
         # This reads the COMPLETE tool.tbl, so it is a full snapshot: the
         # server reconciles away entries the operator deleted locally. (The
-        # two-way sync path sends deltas and must NOT use snapshot mode.)
-        result = http_json(
-            "PUT",
-            "%s/api/v1/machines/%s/tool-table" % (base_url, machine_id),
-            api_key,
-            body={"items": entries, "mode": "snapshot"},
-        )
+        # two-way sync path sends deltas with mode 'merge' instead.)
+        result = _sync_push(base_url, machine_id, machine_name, api_key,
+                            slots, mode="snapshot")
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0  # benign: never block the machine
 
-    log("Pushed %s entries" % result.get("success_count"))
+    log("Pushed %d entries" % len(result.get("items", [])))
     removed = result.get("removed_tool_numbers") or []
     if removed:
         log("Reconciled %d entr%s removed locally: T%s"
@@ -442,36 +525,20 @@ def _save_state(path, state):
         json.dump(state, f, indent=2)
 
 
-def _entry_fields(entry):
-    """The server-side fields that flow back to the table - the only ones
-    whose change means 'the server changed'. Version numbers are NOT used
-    for change detection: binding confirmations and other metadata writes
-    bump the version without touching data (found live: a confirm made
-    the next touch-off look like a conflict)."""
-    return {
-        "offsets": entry.get("offsets") or {},
-        "pocket": entry.get("pocket"),
-        "description": entry.get("description"),
-    }
-
-
 def _entry_to_local_overlay(tool, entry):
-    """Overlay a server entry onto a locally-parsed tool dict.
+    """Overlay a server entry's canonical offsets onto a local tool dict.
 
-    Only the fields the server owns flow back: offsets, pocket,
-    description. Everything else (U/V/W, angles, orientation) keeps the
-    machine's values.
+    Only the observable canonical fields the server owns flow back: the
+    offsets. Everything else (U/V/W, angles, orientation, the comment) keeps
+    the machine's values. In the v2 schema offsets are the only canonical
+    fields this client both observes and consumes.
     """
     merged = dict(tool)
-    offsets = entry.get("offsets") or {}
+    offsets = _entry_offsets(entry)
     for src, dst in (("z", "z_offset"), ("x", "x_offset"),
                      ("y", "y_offset"), ("diameter", "diameter")):
         if offsets.get(src) is not None:
             merged[dst] = offsets[src]
-    if entry.get("pocket") is not None:
-        merged["pocket"] = entry["pocket"]
-    if entry.get("description"):
-        merged["comment"] = entry["description"]
     return merged
 
 
@@ -523,19 +590,9 @@ def sync_tool_table(config):
     """
     _init_log_file(config)
 
-    base_url = (config.get("SMOOTH_API_URL") or "").rstrip("/")
-    machine_name = config.get("MACHINE_NAME")
-    table_path = config.get("TOOL_TABLE")
-    if not table_path and config.get("LINUXCNC_INI"):
-        try:
-            table_path = find_tool_table(config["LINUXCNC_INI"])
-        except (OSError, ToolTableError) as e:
-            log("ERROR: %s" % e)
-            return 2
-    if not base_url or not machine_name or not table_path:
-        log("ERROR: SMOOTH_API_URL, MACHINE_NAME, and TOOL_TABLE (or "
-            "LINUXCNC_INI) must be configured")
-        return 2
+    base_url, machine_name, table_path, err = _resolve_inputs(config)
+    if err is not None:
+        return err
 
     try:
         with open(table_path) as f:
@@ -555,10 +612,11 @@ def sync_tool_table(config):
     backup_dir = config.get("LOG_DIR") or os.path.dirname(os.path.abspath(table_path))
 
     try:
-        machine_id = _ensure_machine(base_url, api_key, machine_name)
-        server = {e["tool_number"]: e for e in http_json(
-            "GET", "%s/api/v1/machines/%s/tool-table" % (base_url, machine_id),
-            api_key).get("items", [])}
+        machine_id = _ensure_machine(base_url, api_key, machine_name,
+                                     state, state_file)
+        server = {_entry_tool_number(e): e for e in http_json(
+            "GET", "%s/api/v1/tool-table-entry-records?machine_id=%s"
+            % (base_url, machine_id), api_key).get("items", [])}
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0
@@ -580,14 +638,13 @@ def sync_tool_table(config):
             # adopt the baseline; only a genuine content divergence — which we
             # have no history to arbitrate — is a conflict. (Without this, a
             # first sync after a push flags EVERY row as a false conflict.)
-            agree = _entry_fields(entry) == \
-                _entry_fields(tool_to_entry(local_tools[n], units=units))
+            agree = _entry_offsets(entry) == _local_offsets(local_tools[n])
             local_changed = not agree
             server_changed = not agree
         else:
             local_changed = local_lines[n] != last.get("local_line")
             server_changed = entry is not None and \
-                _entry_fields(entry) != last.get("server_fields")
+                _entry_offsets(entry) != last.get("server_fields")
             if entry is None:
                 local_changed = True  # never seen by server: push
                 server_changed = False
@@ -598,9 +655,9 @@ def sync_tool_table(config):
                 "touching neither. Resolve by re-editing one side." % n)
             continue
         if local_changed:
-            to_push.append(tool_to_entry(local_tools[n], units=units))
+            to_push.append(tool_to_slot(local_tools[n], machine_name, units=units))
         elif server_changed:
-            if entry.get("tool_record_id"):
+            if _entry_bound(entry):
                 merged = _entry_to_local_overlay(local_tools[n], entry)
                 new_line = generate_tool_table_line(merged)
                 if new_line != local_lines[n]:
@@ -611,16 +668,18 @@ def sync_tool_table(config):
     pushed = {}
     if to_push:
         try:
-            result = http_json(
-                "PUT", "%s/api/v1/machines/%s/tool-table" % (base_url, machine_id),
-                api_key, body={"items": to_push})
+            # Deltas, NOT a snapshot: 'merge' touches only the slots we send,
+            # so unchanged / unbound-server-changed / conflicted slots and any
+            # server-side additions are left exactly as they are.
+            result = _sync_push(base_url, machine_id, machine_name, api_key,
+                                to_push, mode="merge")
         except ServerUnreachable as e:
             log("Server not reachable mid-sync, will retry: %s" % e)
             return 0
         for error in result.get("errors", []):
             log("Server rejected item %s: %s" % (error.get("index"),
                                                  error.get("message")))
-        pushed = {e["tool_number"]: e for e in result.get("items", [])}
+        pushed = {_entry_tool_number(e): e for e in result.get("items", [])}
         log("Pushed %d changed tool(s)" % len(pushed))
 
     if to_write:
@@ -647,7 +706,7 @@ def sync_tool_table(config):
             continue
         # delete-vs-edit: if the server copy changed since our last sync, this
         # is a real conflict - never silently clobber a server-side edit.
-        if _entry_fields(server[n]) != known[key].get("server_fields"):
+        if _entry_offsets(server[n]) != known[key].get("server_fields"):
             conflicts.append(n)
             log("CONFLICT: T%d deleted locally but changed on the server - "
                 "touching neither. Resolve by re-editing or re-deleting." % n)
@@ -655,18 +714,26 @@ def sync_tool_table(config):
         to_delete.append(n)
 
     if to_delete:
+        # The v2 API has no dedicated delete endpoint, so a deletion is a
+        # snapshot push of exactly the slots that should REMAIN: the server
+        # reconciles away the client-managed (linuxcnc) slots we omitted -
+        # which are precisely the locally-deleted ones - and reports them in
+        # `removed_tool_numbers`. Server-side-only slots (no linuxcnc section)
+        # are not the client's to reconcile and are left untouched.
+        keep = [tool_to_slot(local_tools[n], machine_name, units=units)
+                for n in sorted(local_tools) if n not in conflicts]
         try:
-            result = http_json(
-                "DELETE", "%s/api/v1/machines/%s/tool-table" % (base_url, machine_id),
-                api_key, body={"tool_numbers": to_delete})
+            result = _sync_push(base_url, machine_id, machine_name, api_key,
+                                keep, mode="snapshot")
         except ServerUnreachable as e:
             log("Server not reachable mid-sync, will retry: %s" % e)
             return 0
         for error in result.get("errors", []):
             log("Server rejected delete %s: %s" % (error.get("index"),
                                                    error.get("message")))
+        removed = result.get("removed_tool_numbers") or to_delete
         log("Removed %d tool(s) deleted locally: T%s"
-            % (len(to_delete), ", T".join(str(n) for n in to_delete)))
+            % (len(removed), ", T".join(str(n) for n in removed)))
 
     # record the new baseline (conflicted tools keep their OLD baseline so
     # they are re-detected next sync)
@@ -680,9 +747,9 @@ def sync_tool_table(config):
         entry = pushed.get(n) or server.get(n)
         new_tools[key] = {
             "local_line": local_lines[n],
-            "server_fields": _entry_fields(entry) if entry else None,
+            "server_fields": _entry_offsets(entry) if entry else None,
         }
-    _save_state(state_file, {"tools": new_tools})
+    _save_state(state_file, {"machine_id": machine_id, "tools": new_tools})
 
     if not to_push and not to_write and not to_delete and not conflicts:
         log("In sync - nothing to do")

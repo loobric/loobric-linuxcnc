@@ -4,16 +4,20 @@
 
 """Push-flow tests with a stubbed HTTP transport (stdlib unittest + mock).
 
-Assumptions:
+Assumptions (v2 sectioned schema):
 - All server traffic goes through smooth_linuxcnc.http_json(), so tests
   stub exactly one seam
-- push_tool_table() ensures the machine exists (find by name, create if
-  missing), then PUTs the table
+- push_tool_table() creates+names a MachineRecord on first run (POST
+  /machine-records then POST .../assert), PERSISTS the returned internal.id
+  in the state file, and reuses it on later runs
+- the whole table is pushed in ONE /sync call (mode=snapshot), which returns
+  {"items": [...], "removed_tool_numbers": [...]}
 - Benign failure: an unreachable server logs and returns exit code 0
   (cron must never block or spam); usage/config errors return 2
 """
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -23,78 +27,145 @@ import smooth_linuxcnc as sl
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample.tbl")
 
-CFG = {
-    "SMOOTH_API_URL": "http://nas.local:8000",
-    "SMOOTH_API_KEY": "k",
-    "MACHINE_NAME": "mill01",
-    "TOOL_TABLE": FIXTURE,
-}
+
+def sectioned(slot, machine_id="m-1", machine="mill01"):
+    """Build a server sectioned entry from a pushed slot."""
+    src = "observed:linuxcnc@%s" % machine
+    offsets = {}
+    for key in ("z", "x", "y", "diameter"):
+        if slot["offsets"].get(key) is not None:
+            offsets[key] = {"value": slot["offsets"][key],
+                            "unit": slot["offsets"].get(key + "_unit"),
+                            "source": src}
+    return {
+        "internal": {"id": "e-%d" % slot["tool_number"], "machine_id": machine_id,
+                     "version": 1, "created_at": "t", "updated_at": "t"},
+        "canonical": {
+            "tool_number": {"value": slot["tool_number"], "source": src},
+            "bound_instance_id": {"value": None, "source": "unknown"},
+            "offsets": offsets,
+        },
+        "clients": {"linuxcnc": {
+            "client_version": sl.CLIENT_VERSION,
+            "client_item_id": slot.get("client_item_id"),
+            "created_at": "t", "updated_at": "t",
+            "data": slot.get("data", {}),
+        }},
+    }
 
 
 class TestPushFlow(unittest.TestCase):
 
-    def test_push_creates_machine_then_puts_table(self):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.cfg = {
+            "SMOOTH_API_URL": "http://nas.local:8000",
+            "SMOOTH_API_KEY": "k",
+            "MACHINE_NAME": "mill01",
+            "TOOL_TABLE": FIXTURE,
+            "STATE_DIR": self.dir,
+        }
+
+    def test_push_creates_names_machine_then_syncs_table(self):
         calls = []
 
         def fake_http(method, url, api_key, body=None, timeout=10):
             calls.append((method, url, body))
-            if method == "GET" and url.endswith("/api/v1/machines"):
-                return {"items": []}
-            if method == "POST" and url.endswith("/api/v1/machines"):
-                return {"success_count": 1, "errors": [],
-                        "items": [{"id": "m-1", "name": "mill01"}]}
-            if method == "PUT" and url.endswith("/api/v1/machines/m-1/tool-table"):
-                return {"success_count": len(body["items"]), "errors": [], "items": body["items"]}
+            if method == "POST" and url.endswith("/api/v1/machine-records"):
+                return {"internal": {"id": "m-1", "version": 1},
+                        "canonical": {}, "clients": {}}
+            if method == "POST" and url.endswith("/api/v1/machine-records/m-1/assert"):
+                return {"internal": {"id": "m-1"},
+                        "canonical": {"name": {"value": body["value"],
+                                               "source": "asserted:linuxcnc"}},
+                        "clients": {}}
+            if method == "POST" and url.endswith("/api/v1/tool-table-entry-records/sync"):
+                self.assertEqual(body["mode"], "snapshot")
+                self.assertEqual(body["machine_id"], "m-1")
+                return {"items": [sectioned(s) for s in body["slots"]],
+                        "removed_tool_numbers": []}
             raise AssertionError("unexpected call: %s %s" % (method, url))
 
         with mock.patch.object(sl, "http_json", fake_http):
-            code = sl.push_tool_table(CFG)
+            code = sl.push_tool_table(self.cfg)
 
         self.assertEqual(code, 0)
-        methods = [c[0] for c in calls]
-        self.assertEqual(methods, ["GET", "POST", "PUT"])
-        put_body = calls[2][2]
-        self.assertEqual(len(put_body["items"]), 4)
-        self.assertEqual(put_body["items"][1]["tool_number"], 3)
-        # entries are pushed unbound; binding is the server/inbox's job
-        self.assertNotIn("tool_record_id", put_body["items"][1])
+        methods = [(c[0], c[1].rsplit("/api/v1/", 1)[-1]) for c in calls]
+        self.assertEqual(methods, [
+            ("POST", "machine-records"),
+            ("POST", "machine-records/m-1/assert"),
+            ("POST", "tool-table-entry-records/sync"),
+        ])
+        # the name assert carries the actor + path/value the API expects
+        assert_body = calls[1][2]
+        self.assertEqual(assert_body, {"path": "name", "value": "mill01",
+                                       "actor": "linuxcnc"})
+        sync_body = calls[2][2]
+        self.assertEqual(len(sync_body["slots"]), 4)
+        self.assertEqual(sync_body["slots"][1]["tool_number"], 3)
+        # slots push in our lane: no canonical/bound identity is asserted
+        self.assertNotIn("bound_instance_id", sync_body["slots"][1])
+        self.assertNotIn("canonical", sync_body["slots"][1])
 
-    def test_push_reuses_existing_machine(self):
+    def test_push_persists_and_reuses_machine_id(self):
+        # first push creates + names the machine, persisting its id
+        def first(method, url, api_key, body=None, timeout=10):
+            if url.endswith("/machine-records"):
+                return {"internal": {"id": "m-7"}, "canonical": {}, "clients": {}}
+            if url.endswith("/assert"):
+                return {"internal": {"id": "m-7"}, "canonical": {}, "clients": {}}
+            if url.endswith("/sync"):
+                return {"items": [], "removed_tool_numbers": []}
+            raise AssertionError(url)
+
+        with mock.patch.object(sl, "http_json", first):
+            self.assertEqual(sl.push_tool_table(self.cfg), 0)
+
+        # second push must NOT create/name again - it reuses the stored id
         calls = []
 
-        def fake_http(method, url, api_key, body=None, timeout=10):
+        def second(method, url, api_key, body=None, timeout=10):
             calls.append((method, url))
-            if method == "GET" and url.endswith("/api/v1/machines"):
-                return {"items": [{"id": "m-9", "name": "mill01"}]}
-            if method == "PUT" and url.endswith("/api/v1/machines/m-9/tool-table"):
-                return {"success_count": 4, "errors": [], "items": []}
-            raise AssertionError("unexpected call: %s %s" % (method, url))
+            if url.endswith("/machine-records") or url.endswith("/assert"):
+                raise AssertionError("should not re-create machine: %s" % url)
+            if url.endswith("/sync"):
+                self.assertEqual(body["machine_id"], "m-7")
+                return {"items": [], "removed_tool_numbers": []}
+            raise AssertionError(url)
 
-        with mock.patch.object(sl, "http_json", fake_http):
-            self.assertEqual(sl.push_tool_table(CFG), 0)
-        self.assertEqual([c[0] for c in calls], ["GET", "PUT"])
+        with mock.patch.object(sl, "http_json", second):
+            self.assertEqual(sl.push_tool_table(self.cfg), 0)
+        self.assertEqual([c[0] for c in calls], ["POST"])  # only /sync
+
+    def test_snapshot_reconcile_removes_are_logged(self):
+        logs = []
+
+        def fake_http(method, url, api_key, body=None, timeout=10):
+            if url.endswith("/machine-records"):
+                return {"internal": {"id": "m-1"}, "canonical": {}, "clients": {}}
+            if url.endswith("/assert"):
+                return {"internal": {"id": "m-1"}, "canonical": {}, "clients": {}}
+            if url.endswith("/sync"):
+                return {"items": [sectioned(s) for s in body["slots"]],
+                        "removed_tool_numbers": [99]}
+            raise AssertionError(url)
+
+        with mock.patch.object(sl, "http_json", fake_http), \
+             mock.patch.object(sl, "log", logs.append):
+            self.assertEqual(sl.push_tool_table(self.cfg), 0)
+        self.assertTrue(any("Reconciled" in m and "T99" in m for m in logs))
 
     def test_unreachable_server_is_benign(self):
         def fake_http(method, url, api_key, body=None, timeout=10):
             raise sl.ServerUnreachable("connection refused")
 
         with mock.patch.object(sl, "http_json", fake_http):
-            code = sl.push_tool_table(CFG)
+            code = sl.push_tool_table(self.cfg)
         self.assertEqual(code, 0)
 
     def test_missing_config_is_usage_error(self):
-        code = sl.push_tool_table({"SMOOTH_API_URL": "http://x"})  # no key/machine/table
+        code = sl.push_tool_table({"SMOOTH_API_URL": "http://x"})  # no machine/table
         self.assertEqual(code, 2)
-
-    def test_server_side_item_errors_are_logged_not_fatal(self):
-        def fake_http(method, url, api_key, body=None, timeout=10):
-            if method == "GET":
-                return {"items": [{"id": "m-1", "name": "mill01"}]}
-            return {"success_count": 3,
-                    "errors": [{"index": 0, "message": "boom"}], "items": []}
-
-        with mock.patch.object(sl, "http_json", fake_http):
-            self.assertEqual(sl.push_tool_table(CFG), 0)
 
 
 if __name__ == "__main__":
