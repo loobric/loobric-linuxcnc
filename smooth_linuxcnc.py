@@ -228,7 +228,7 @@ def tool_to_slot(tool, machine_name, units="mm"):
             offsets[dst + "_unit"] = units
 
     params = {k: v for k, v in tool.items() if k != "comment" and v is not None}
-    return {
+    slot = {
         "tool_number": tool["tool_number"],
         "offsets": offsets,
         "data": {
@@ -237,6 +237,12 @@ def tool_to_slot(tool, machine_name, units="mm"):
         },
         "client_item_id": "%s:T%d" % (machine_name, tool["tool_number"]),
     }
+    # The table comment is the operator's label for the slot — observed table
+    # state. Surfacing it gives the tool a human-readable name (the server
+    # stamps observed:linuxcnc@<machine>; on adopt it seeds the instance name).
+    if tool.get("comment"):
+        slot["description"] = tool["comment"]
+    return slot
 
 
 def _entry_tool_number(entry):
