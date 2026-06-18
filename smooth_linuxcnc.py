@@ -37,7 +37,7 @@ v2 sectioned schema (docs/TOOL_SCHEMA.md): this client only ever writes its
 own `clients.linuxcnc` section plus the few canonical fields a machine may
 OBSERVE (tool_number, offsets). It never sends `internal`/`canonical` keys;
 the server stamps provenance `observed:linuxcnc@<machine>` itself. Canonical
-offsets read back as `canonical.offsets.<key>.{value,unit,source}`, and a slot
+offsets read back as `canonical.offsets.<key>.{value,unit,source}`, and an entry
 is "bound" when `canonical.bound_instance_id.value` is not null.
 """
 
@@ -208,7 +208,7 @@ def generate_tool_table(tools):
 
 
 # ---------------------------------------------------------------------------
-# Mapping to the Smooth API (v2 sectioned schema, /sync slots)
+# Mapping to the Smooth API (v2 sectioned schema, /sync entries)
 # ---------------------------------------------------------------------------
 
 # canonical offset key  <-  local tool dict key
@@ -216,17 +216,17 @@ _OFFSET_KEYS = [("z_offset", "z"), ("x_offset", "x"), ("y_offset", "y"),
                 ("diameter", "diameter")]
 
 
-def tool_to_slot(tool, machine_name, units="mm"):
-    """Map a parsed tool to a `slots` entry for the /sync call.
+def tool_to_entry(tool, machine_name, units="mm"):
+    """Map a parsed tool to an `entries` item for the /sync call.
 
-    A slot carries ONLY what a machine may legitimately state:
+    An entry carries ONLY what a machine may legitimately state:
     - `tool_number` and plain `offsets` (z/x/y/diameter + `<key>_unit`): the
       observable canonical values. The server stamps them with provenance
       `observed:linuxcnc@<machine>`; we never send `source`/`canonical`.
     - `data`: the opaque, client-owned linuxcnc payload (the raw canonical
       line + ALL parsed params) so nothing is lost on round trip. It becomes
       `clients.linuxcnc.data` on the server.
-    - `client_item_id`: this client's stable handle for the slot, the server's
+    - `client_item_id`: this client's stable handle for the entry, the server's
       re-adoption fallback (§6). Binding is the server/inbox's job; we never
       send a bound_instance_id.
     """
@@ -237,7 +237,7 @@ def tool_to_slot(tool, machine_name, units="mm"):
             offsets[dst + "_unit"] = units
 
     params = {k: v for k, v in tool.items() if k != "comment" and v is not None}
-    slot = {
+    entry = {
         "tool_number": tool["tool_number"],
         "offsets": offsets,
         "data": {
@@ -246,25 +246,25 @@ def tool_to_slot(tool, machine_name, units="mm"):
         },
         "client_item_id": "%s:T%d" % (machine_name, tool["tool_number"]),
     }
-    # The table comment is the operator's label for the slot — observed table
+    # The table comment is the operator's label for the entry — observed table
     # state. Surfacing it gives the tool a human-readable name (the server
     # stamps observed:linuxcnc@<machine>; on adopt it seeds the instance name).
     if tool.get("comment"):
-        slot["description"] = tool["comment"]
-    return slot
+        entry["description"] = tool["comment"]
+    return entry
 
 
 def _entry_tool_number(entry):
-    """The slot number from a sectioned entry's canonical section."""
+    """The tool number from a sectioned entry's canonical section."""
     return entry["canonical"]["tool_number"]["value"]
 
 
 def _entry_bound(entry):
-    """True when the slot has a confirmed physical tool bound to it.
+    """True when the entry has a confirmed physical tool bound to it.
 
-    Replaces the old top-level `tool_record_id`: a slot is bound when
+    Replaces the old top-level `tool_record_id`: an entry is bound when
     `canonical.bound_instance_id.value` is not null (asserted on the server).
-    Pull/write-back applies ONLY to bound slots.
+    Pull/write-back applies ONLY to bound entries.
     """
     field = (entry.get("canonical") or {}).get("bound_instance_id") or {}
     return field.get("value") is not None
@@ -407,7 +407,7 @@ def _ensure_machine(base_url, api_key, name, state, state_file):
     machine_id = state.get("machine_id")
     if machine_id:
         # Verify it still exists: it may have been deleted in the UI, or the
-        # server DB reset. A stale id would silently push slots into a ghost
+        # server DB reset. A stale id would silently push entries into a ghost
         # machine the UI can't show. (A network error propagates as benign.)
         try:
             http_json("GET", "%s/api/v1/machine-records/%s" % (base_url, machine_id),
@@ -431,9 +431,9 @@ def _ensure_machine(base_url, api_key, name, state, state_file):
     return machine_id
 
 
-def _sync_push(base_url, machine_id, machine_name, api_key, slots, mode):
+def _sync_push(base_url, machine_id, machine_name, api_key, entries, mode):
     """One /sync call. `mode` is 'snapshot' (full table; reconciles away
-    absent slots) or 'merge' (deltas; touches only the slots sent)."""
+    absent entries) or 'merge' (deltas; touches only the entries sent)."""
     return http_json(
         "POST", "%s/api/v1/tool-table-entry-records/sync" % base_url, api_key,
         body={
@@ -443,7 +443,7 @@ def _sync_push(base_url, machine_id, machine_name, api_key, slots, mode):
             "client_version": CLIENT_VERSION,
             "mode": mode,
             "force": False,
-            "slots": slots,
+            "entries": entries,
         })
 
 
@@ -490,13 +490,13 @@ def push_tool_table(config):
         return 2
 
     units = config.get("UNITS", "mm")
-    slots = [tool_to_slot(t, machine_name, units=units) for t in tools]
+    entries = [tool_to_entry(t, machine_name, units=units) for t in tools]
     api_key = config.get("SMOOTH_API_KEY", "")
     state_file = _state_path(config, machine_name)
     state = _load_state(state_file)
 
     log("Pushing %d tools from %s as machine '%s'"
-        % (len(slots), table_path, machine_name))
+        % (len(entries), table_path, machine_name))
     try:
         machine_id = _ensure_machine(base_url, api_key, machine_name,
                                      state, state_file)
@@ -504,7 +504,7 @@ def push_tool_table(config):
         # server reconciles away entries the operator deleted locally. (The
         # two-way sync path sends deltas with mode 'merge' instead.)
         result = _sync_push(base_url, machine_id, machine_name, api_key,
-                            slots, mode="snapshot")
+                            entries, mode="snapshot")
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0  # benign: never block the machine
@@ -688,7 +688,7 @@ def sync_tool_table(config):
                 "touching neither. Resolve by re-editing one side." % n)
             continue
         if local_changed:
-            to_push.append(tool_to_slot(local_tools[n], machine_name, units=units))
+            to_push.append(tool_to_entry(local_tools[n], machine_name, units=units))
         elif server_changed:
             if _entry_bound(entry):
                 merged = _entry_to_local_overlay(local_tools[n], entry)
@@ -701,8 +701,8 @@ def sync_tool_table(config):
     pushed = {}
     if to_push:
         try:
-            # Deltas, NOT a snapshot: 'merge' touches only the slots we send,
-            # so unchanged / unbound-server-changed / conflicted slots and any
+            # Deltas, NOT a snapshot: 'merge' touches only the entries we send,
+            # so unchanged / unbound-server-changed / conflicted entries and any
             # server-side additions are left exactly as they are.
             result = _sync_push(base_url, machine_id, machine_name, api_key,
                                 to_push, mode="merge")
@@ -751,12 +751,12 @@ def sync_tool_table(config):
 
     if to_delete:
         # The v2 API has no dedicated delete endpoint, so a deletion is a
-        # snapshot push of exactly the slots that should REMAIN: the server
-        # reconciles away the client-managed (linuxcnc) slots we omitted -
+        # snapshot push of exactly the entries that should REMAIN: the server
+        # reconciles away the client-managed (linuxcnc) entries we omitted -
         # which are precisely the locally-deleted ones - and reports them in
-        # `removed_tool_numbers`. Server-side-only slots (no linuxcnc section)
+        # `removed_tool_numbers`. Server-side-only entries (no linuxcnc section)
         # are not the client's to reconcile and are left untouched.
-        keep = [tool_to_slot(local_tools[n], machine_name, units=units)
+        keep = [tool_to_entry(local_tools[n], machine_name, units=units)
                 for n in sorted(local_tools) if n not in conflicts]
         try:
             result = _sync_push(base_url, machine_id, machine_name, api_key,

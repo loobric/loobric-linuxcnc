@@ -16,7 +16,7 @@ The contract under test (stdlib unittest, one stubbed HTTP seam):
 - unbound entries never write back; comments/blank lines in the .tbl survive
   verbatim (line-surgical writes)
 - a local deletion propagates as a snapshot /sync that omits the removed
-  slot, so the server reconciles it away (removed_tool_numbers); a
+  entry, so the server reconciles it away (removed_tool_numbers); a
   server-side-only addition is never reconciled
 - idempotent: a second sync with no changes makes no HTTP write and no file
   write (change-detection short-circuit)
@@ -57,13 +57,13 @@ class FakeServer:
     def _src(self):
         return "observed:linuxcnc@%s" % self.machine_name
 
-    def _make_entry(self, slot, bound_id=None):
-        n = slot["tool_number"]
+    def _make_entry(self, entry, bound_id=None):
+        n = entry["tool_number"]
         offsets = {}
         for key in ("z", "x", "y", "diameter"):
-            if slot["offsets"].get(key) is not None:
-                offsets[key] = {"value": slot["offsets"][key],
-                                "unit": slot["offsets"].get(key + "_unit"),
+            if entry["offsets"].get(key) is not None:
+                offsets[key] = {"value": entry["offsets"][key],
+                                "unit": entry["offsets"].get(key + "_unit"),
                                 "source": self._src()}
         bound = ({"value": bound_id, "source": "asserted:human@inbox"}
                  if bound_id else {"value": None, "source": "unknown"})
@@ -76,15 +76,15 @@ class FakeServer:
                 "offsets": offsets,
             },
             "clients": {"linuxcnc": {
-                "client_version": slot.get("client_version", sl.CLIENT_VERSION),
-                "client_item_id": slot.get("client_item_id"),
+                "client_version": entry.get("client_version", sl.CLIENT_VERSION),
+                "client_item_id": entry.get("client_item_id"),
                 "created_at": "t", "updated_at": "t",
-                "data": slot.get("data", {}),
+                "data": entry.get("data", {}),
             }},
         }
 
     def server_only_entry(self, n, z=None):
-        """A slot present on the server with NO linuxcnc client section
+        """An entry present on the server with NO linuxcnc client section
         (e.g. created by another client) - the client must never delete it."""
         offsets = {}
         if z is not None:
@@ -144,22 +144,22 @@ class FakeServer:
             mode = body.get("mode", "merge")
             seen = set()
             out = []
-            for slot in body["slots"]:
-                n = slot["tool_number"]
+            for entry in body["entries"]:
+                n = entry["tool_number"]
                 seen.add(n)
                 if n in self.entries:
                     prev = self.entries[n]
                     bound_id = prev["canonical"]["bound_instance_id"]["value"]
-                    new = self._make_entry(slot, bound_id=bound_id)
+                    new = self._make_entry(entry, bound_id=bound_id)
                     new["internal"]["version"] = prev["internal"]["version"] + 1
                     self.entries[n] = new
                 else:
-                    self.entries[n] = self._make_entry(slot)
+                    self.entries[n] = self._make_entry(entry)
                 out.append(self.entries[n])
             removed = []
             if mode == "snapshot":
-                # reconcile away only THIS client's slots that we omitted;
-                # server-side-only slots (no linuxcnc section) are untouched
+                # reconcile away only THIS client's entries that we omitted;
+                # server-side-only entries (no linuxcnc section) are untouched
                 for n in list(self.entries):
                     if n in seen:
                         continue
@@ -269,10 +269,10 @@ class SyncCycleTest(unittest.TestCase):
         """Simulate the server already holding this table (an earlier push),
         optionally with every entry bound - but with NO local sync state."""
         for t in sl.parse_tool_table(self.read_tbl()):
-            slot = sl.tool_to_slot(t, "mill01", units="mm")
-            n = slot["tool_number"]
+            entry = sl.tool_to_entry(t, "mill01", units="mm")
+            n = entry["tool_number"]
             self.server.entries[n] = self.server._make_entry(
-                slot, bound_id=("inst-%d" % n) if bind else None)
+                entry, bound_id=("inst-%d" % n) if bind else None)
 
     def test_first_sync_when_server_already_has_bound_entries_is_in_sync(self):
         """Controller pushed earlier (no sync state), records were created and

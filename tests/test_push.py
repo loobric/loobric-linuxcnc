@@ -28,28 +28,28 @@ import smooth_linuxcnc as sl
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample.tbl")
 
 
-def sectioned(slot, machine_id="m-1", machine="mill01"):
-    """Build a server sectioned entry from a pushed slot."""
+def sectioned(entry, machine_id="m-1", machine="mill01"):
+    """Build a server sectioned entry from a pushed entry."""
     src = "observed:linuxcnc@%s" % machine
     offsets = {}
     for key in ("z", "x", "y", "diameter"):
-        if slot["offsets"].get(key) is not None:
-            offsets[key] = {"value": slot["offsets"][key],
-                            "unit": slot["offsets"].get(key + "_unit"),
+        if entry["offsets"].get(key) is not None:
+            offsets[key] = {"value": entry["offsets"][key],
+                            "unit": entry["offsets"].get(key + "_unit"),
                             "source": src}
     return {
-        "internal": {"id": "e-%d" % slot["tool_number"], "machine_id": machine_id,
+        "internal": {"id": "e-%d" % entry["tool_number"], "machine_id": machine_id,
                      "version": 1, "created_at": "t", "updated_at": "t"},
         "canonical": {
-            "tool_number": {"value": slot["tool_number"], "source": src},
+            "tool_number": {"value": entry["tool_number"], "source": src},
             "bound_instance_id": {"value": None, "source": "unknown"},
             "offsets": offsets,
         },
         "clients": {"linuxcnc": {
             "client_version": sl.CLIENT_VERSION,
-            "client_item_id": slot.get("client_item_id"),
+            "client_item_id": entry.get("client_item_id"),
             "created_at": "t", "updated_at": "t",
-            "data": slot.get("data", {}),
+            "data": entry.get("data", {}),
         }},
     }
 
@@ -87,7 +87,7 @@ class TestPushFlow(unittest.TestCase):
             if method == "POST" and url.endswith("/api/v1/tool-table-entry-records/sync"):
                 self.assertEqual(body["mode"], "snapshot")
                 self.assertEqual(body["machine_id"], "m-1")
-                return {"items": [sectioned(s) for s in body["slots"]],
+                return {"items": [sectioned(s) for s in body["entries"]],
                         "removed_tool_numbers": []}
             raise AssertionError("unexpected call: %s %s" % (method, url))
 
@@ -106,11 +106,11 @@ class TestPushFlow(unittest.TestCase):
         self.assertEqual(assert_body, {"path": "name", "value": "mill01",
                                        "actor": "linuxcnc"})
         sync_body = calls[2][2]
-        self.assertEqual(len(sync_body["slots"]), 4)
-        self.assertEqual(sync_body["slots"][1]["tool_number"], 3)
-        # slots push in our lane: no canonical/bound identity is asserted
-        self.assertNotIn("bound_instance_id", sync_body["slots"][1])
-        self.assertNotIn("canonical", sync_body["slots"][1])
+        self.assertEqual(len(sync_body["entries"]), 4)
+        self.assertEqual(sync_body["entries"][1]["tool_number"], 3)
+        # entries push in our lane: no canonical/bound identity is asserted
+        self.assertNotIn("bound_instance_id", sync_body["entries"][1])
+        self.assertNotIn("canonical", sync_body["entries"][1])
 
     def test_push_persists_and_reuses_machine_id(self):
         # first push creates + names the machine, persisting its id
@@ -146,7 +146,7 @@ class TestPushFlow(unittest.TestCase):
 
     def test_recreates_machine_when_stored_id_is_gone(self):
         """The stored machine was deleted (UI) or the DB reset: a stale id would
-        push slots into a ghost machine the UI can't show. The client detects the
+        push entries into a ghost machine the UI can't show. The client detects the
         404 and re-registers, so the table lands under a LIVE machine."""
         state_file = sl._state_path(self.cfg, self.cfg["MACHINE_NAME"])
         sl._save_state(state_file, {"machine_id": "m-dead", "tools": {}})
@@ -179,7 +179,7 @@ class TestPushFlow(unittest.TestCase):
             if url.endswith("/assert"):
                 return {"internal": {"id": "m-1"}, "canonical": {}, "clients": {}}
             if url.endswith("/sync"):
-                return {"items": [sectioned(s) for s in body["slots"]],
+                return {"items": [sectioned(s) for s in body["entries"]],
                         "removed_tool_numbers": [99]}
             raise AssertionError(url)
 

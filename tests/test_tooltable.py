@@ -59,45 +59,45 @@ class TestParse(unittest.TestCase):
         self.assertEqual(tools[0]["tool_number"], 7)
 
 
-class TestSlotMapping(unittest.TestCase):
-    """Mapping a parsed tool to a /sync `slots` entry (v2 sectioned schema).
+class TestEntryMapping(unittest.TestCase):
+    """Mapping a parsed tool to a /sync `entries` item (v2 sectioned schema).
 
     Assumptions (mirrors docs/TOOL_SCHEMA.md):
-    - a slot carries only what a machine may OBSERVE: tool_number + plain
+    - an entry carries only what a machine may OBSERVE: tool_number + plain
       offsets (z/x/y/diameter) with per-key `<key>_unit`; the server stamps
-      provenance observed:linuxcnc@<machine>, so the slot sends no `source`
-    - the slot NEVER sends internal/canonical keys, nor a bound_instance_id
+      provenance observed:linuxcnc@<machine>, so the entry sends no `source`
+    - the entry NEVER sends internal/canonical keys, nor a bound_instance_id
       (binding is the server/inbox's job)
     - `data` is the opaque linuxcnc payload: the raw line + ALL parsed params
       (lossless), and becomes clients.linuxcnc.data on the server
-    - `client_item_id` is the slot's stable handle, "<machine>:T<n>"
+    - `client_item_id` is the entry's stable handle, "<machine>:T<n>"
     """
 
-    def test_slot_payload_shape(self):
+    def test_entry_payload_shape(self):
         line = "T3 P3 D+6.350000 Z-48.250000 X+1.500000 ;1/4 downcut"
         tool = sl.parse_tool_table(line)[0]
-        slot = sl.tool_to_slot(tool, "millstone", units="mm")
+        entry = sl.tool_to_entry(tool, "millstone", units="mm")
 
-        self.assertEqual(slot["tool_number"], 3)
-        self.assertAlmostEqual(slot["offsets"]["z"], -48.25)
-        self.assertEqual(slot["offsets"]["z_unit"], "mm")
-        self.assertAlmostEqual(slot["offsets"]["diameter"], 6.35)
-        self.assertEqual(slot["client_item_id"], "millstone:T3")
+        self.assertEqual(entry["tool_number"], 3)
+        self.assertAlmostEqual(entry["offsets"]["z"], -48.25)
+        self.assertEqual(entry["offsets"]["z_unit"], "mm")
+        self.assertAlmostEqual(entry["offsets"]["diameter"], 6.35)
+        self.assertEqual(entry["client_item_id"], "millstone:T3")
         # opaque linuxcnc payload is lossless
-        self.assertIn("raw", slot["data"])
-        self.assertEqual(slot["data"]["params"]["x_offset"], 1.5)
+        self.assertIn("raw", entry["data"])
+        self.assertEqual(entry["data"]["params"]["x_offset"], 1.5)
         # in our lane: no canonical/internal/provenance, no premature binding
-        self.assertNotIn("canonical", slot)
-        self.assertNotIn("internal", slot)
-        self.assertNotIn("provenance", slot)
-        self.assertNotIn("bound_instance_id", slot)
-        self.assertNotIn("source", slot["offsets"])
+        self.assertNotIn("canonical", entry)
+        self.assertNotIn("internal", entry)
+        self.assertNotIn("provenance", entry)
+        self.assertNotIn("bound_instance_id", entry)
+        self.assertNotIn("source", entry["offsets"])
 
     def test_lathe_params_preserved_in_data(self):
         line = "T22 P22 Z-60.1 U+0.1 I+45.0 Q3 ;lathe"
         tool = sl.parse_tool_table(line)[0]
-        slot = sl.tool_to_slot(tool, "millstone", units="mm")
-        params = slot["data"]["params"]
+        entry = sl.tool_to_entry(tool, "millstone", units="mm")
+        params = entry["data"]["params"]
         self.assertAlmostEqual(params["u_offset"], 0.1)
         self.assertAlmostEqual(params["front_angle"], 45.0)
         self.assertEqual(params["orientation"], 3)
