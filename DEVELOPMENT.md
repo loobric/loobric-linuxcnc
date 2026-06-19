@@ -19,11 +19,11 @@ The client maps each `.tbl` row to a `ToolTableEntry` upsert:
 | `P` | `pocket` |
 | `D`, `X`, `Y`, `Z` | `offsets` (with per-key units) |
 | `;comment` | `description` |
-| everything, verbatim | `extra.linuxcnc.raw` + `.params` (lossless) |
+| everything, verbatim | `clients.linuxcnc.data.raw` + `.params` (lossless) |
 
-Offset fields are stamped `"machine"` in `provenance`. Entries push **unbound**
-(`tool_record_id` absent): binding is the server inbox's job, or the user's —
-never a client-side guess.
+Offset fields are stamped `observed:linuxcnc@<machine>` in `provenance` by the
+server. Entries push **unbound** (`canonical.bound_instance_id` absent): binding
+is the server inbox's job, or the user's — never a client-side guess.
 
 ## Rules of the file
 

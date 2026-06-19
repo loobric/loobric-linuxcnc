@@ -87,7 +87,7 @@ T<num> P<pocket> [D<dia>] [X Y Z U V W offsets] [A B C angles] [Q<orient>] [I<fr
 ```
 
 The raw line and every parsed parameter travel to the server in the entry's
-`extra.linuxcnc` field, so nothing your table says is ever lost in translation.
+`clients.linuxcnc.data` field, so nothing your table says is ever lost in translation.
 
 ## Exit codes
 
