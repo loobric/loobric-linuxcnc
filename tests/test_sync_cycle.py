@@ -52,6 +52,7 @@ class FakeServer:
         self.entries = {}  # tool_number -> sectioned entry
         self.syncs = 0
         self.tool_set = None  # the set bound to this machine, or None
+        self.instances = {}  # instance id -> sectioned tool-instance record
 
     # --- helpers the tests drive -------------------------------------------
 
@@ -146,9 +147,27 @@ class FakeServer:
             "clients": {},
         }
 
+    def set_instance(self, iid, name=None):
+        """Register a tool-instance record so the client can resolve a requested
+        member's human label from its id. An unregistered id 404s (the client
+        then falls back to showing the id)."""
+        self.instances[iid] = {
+            "internal": {"id": iid, "version": 1,
+                         "created_at": "t", "updated_at": "t"},
+            "canonical": {"name": ({"value": name, "source": "asserted:freecad@bob"}
+                                   if name is not None
+                                   else {"value": None, "source": "unknown"})},
+            "clients": {},
+        }
+
     # --- the wire ----------------------------------------------------------
 
     def http(self, method, url, api_key, body=None, timeout=10):
+        if method == "GET" and "/api/v1/tool-instance-records/" in url:
+            iid = url.rstrip("/").rsplit("/", 1)[-1]
+            if iid in self.instances:
+                return self.instances[iid]
+            raise sl.ServerError(404, "not found")
         if method == "POST" and url.endswith("/api/v1/machine-records"):
             return {"internal": {"id": self.machine_id, "version": 1},
                     "canonical": {}, "clients": {}}
@@ -440,6 +459,21 @@ class RequestedMembersTest(SyncCycleTest):
         # NOT reported as "nothing to do" and the .tbl is untouched
         self.assertFalse(any("nothing to do" in m for m in logs))
         self.assertEqual(self.read_tbl(), TBL)
+
+    def test_requested_member_shows_name_and_uuid(self):
+        """The requested member is identified by BOTH its human name and its full
+        instance id: the id disambiguates (two tools may share a name), the name
+        makes it recognizable. Both must appear in the mount request."""
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.set_instance("inst-new", name="M8")
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", 8, None)])
+        code, logs = self.sync_with_logs()
+        summary = [m for m in logs if "requested" in m][0]
+        self.assertIn("M8", summary)
+        self.assertIn("inst-new", summary)   # full id retained for uniqueness
+        self.assertIn("assign pocket 8", summary)
 
     def test_pocket_clause_omitted_when_number_unknown(self):
         """A requested member with no asserted preferred number names no
