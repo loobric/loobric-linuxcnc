@@ -321,10 +321,15 @@ def _bound_instance_ids(server_entries):
     return ids
 
 
-def _member_name(member):
-    """Display name for a set member: the name the server supplies on the
-    member/instance if present, else the bare tool_record_id."""
-    return member.get("name") or member.get("tool_record_id")
+def _member_descriptor(member):
+    """How a requested member is identified in the mount request: BOTH its full
+    instance id and its human name. The id is the unique handle - two tools may
+    share a name (e.g. duplicate "M8"s), so it must be carried for the operator
+    to mount the right one - and the name is what makes it recognizable. Falls
+    back to the id alone when the instance has no resolvable name."""
+    tid = member.get("tool_record_id")
+    name = member.get("name")
+    return '"%s" (%s)' % (name, tid) if name else '"%s"' % tid
 
 
 def _member_preferred_number(member):
@@ -371,12 +376,12 @@ def _requested_clause(requested):
     picks the pocket (docs/ROUNDTRIP.md step 7)."""
     parts = []
     for member in requested:
-        name = _member_name(member)
+        desc = _member_descriptor(member)
         pocket = _member_preferred_number(member)
         if pocket is not None:
-            parts.append('"%s" - mount it and assign pocket %d' % (name, pocket))
+            parts.append('%s - mount it and assign pocket %d' % (desc, pocket))
         else:
-            parts.append('"%s" - mount it and assign a pocket' % name)
+            parts.append('%s - mount it and assign a pocket' % desc)
     noun = "tool" if len(requested) == 1 else "tools"
     return ", %d %s requested: %s" % (len(requested), noun, "; ".join(parts))
 
@@ -398,6 +403,21 @@ def _fetch_set_members(base_url, machine_id, api_key):
     for tool_set in result.get("items", []):
         members.extend((tool_set.get("canonical") or {}).get("members") or [])
     return members
+
+
+def _fetch_instance_label(base_url, instance_id, api_key):
+    """A human-recognizable name for a requested member's tool instance. The set
+    member carries only the instance id; we GET the instance to read its
+    canonical name. Best-effort - a missing/nameless instance or any fetch error
+    yields None so the report falls back to the id and the sync never breaks."""
+    if not instance_id:
+        return None
+    try:
+        rec = http_json("GET", "%s/api/v1/tool-instance-records/%s"
+                        % (base_url, instance_id), api_key)
+    except ServerError:
+        return None
+    return ((rec.get("canonical") or {}).get("name") or {}).get("value")
 
 
 # ---------------------------------------------------------------------------
@@ -899,6 +919,15 @@ def sync_tool_table(config):
     # summary - an open request must NOT read as "nothing to do". The .tbl is
     # never edited for a requested tool; fulfilment is the merge push above.
     requested, pending = classify_set_members(set_members, server.values())
+    # Resolve a human-recognizable name for each requested member so the operator
+    # sees e.g. "M8" rather than the bare instance id (the set member carries
+    # only the id). Falls back to the id when the instance has no name.
+    for member in requested:
+        if not member.get("name"):
+            label = _fetch_instance_label(
+                base_url, member.get("tool_record_id"), api_key)
+            if label:
+                member["name"] = label
     clean = not to_push and not to_write and not to_delete and not conflicts
     if requested or pending:
         summary = "%d tools in sync" % len(local_tools)
