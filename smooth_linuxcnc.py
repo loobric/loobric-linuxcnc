@@ -300,6 +300,107 @@ def _local_offsets(tool):
 
 
 # ---------------------------------------------------------------------------
+# Tool set members: requested / pending bind (smooth-linuxcnc#3)
+#
+# A machine may have a tool SET bound to it (docs/ROUNDTRIP.md). A set member
+# references a tool INSTANCE; when that instance is not yet loaded on this
+# machine, the member is a request the operator must fulfil by mounting the
+# tool. The controller only REPORTS this - it never edits the .tbl for a
+# requested tool. Fulfilment is the operator mounting it and adding the .tbl
+# line, which the existing merge push then turns into a new entry.
+# ---------------------------------------------------------------------------
+
+def _bound_instance_ids(server_entries):
+    """The set of tool-instance ids bound to this machine's entries, read from
+    each entry's canonical.bound_instance_id.value (unbound entries skipped)."""
+    ids = set()
+    for entry in server_entries:
+        field = (entry.get("canonical") or {}).get("bound_instance_id") or {}
+        if field.get("value") is not None:
+            ids.add(field["value"])
+    return ids
+
+
+def _member_name(member):
+    """Display name for a set member: the name the server supplies on the
+    member/instance if present, else the bare tool_record_id."""
+    return member.get("name") or member.get("tool_record_id")
+
+
+def _member_preferred_number(member):
+    """The member's asserted preferred tool number, or None when unknown.
+    `number` is {"value": int|None, "source": ...}; only an asserted preference
+    carries a value, so a value is what lets us suggest a concrete pocket."""
+    return (member.get("number") or {}).get("value")
+
+
+def classify_set_members(members, server_entries):
+    """Split a machine-bound set's members into (requested, pending) lists,
+    using only data already fetched - the set's members and this machine's
+    entries - with no extra per-member server calls.
+
+    REQUESTED: no entry on this machine is bound to the member's instance, so
+    the operator must still mount it. LOADED: an entry is bound to it (in sync,
+    not reported).
+
+    PENDING BIND simplification (docs/ROUNDTRIP_FIXES.md C4): telling a pending
+    bind (an entry was mounted for the instance but the binding is not yet
+    confirmed) apart from loaded/requested needs proposal state the controller
+    does not hold. We therefore trust the server's derived per-member `state`
+    when it supplies one (it sees proposals): state == "pending bind" -> pending.
+    Absent that signal we fall back to the binding alone: bound -> loaded (in
+    sync), unbound-but-in-set -> requested.
+    """
+    bound = _bound_instance_ids(server_entries)
+    requested = []
+    pending = []
+    for member in members:
+        if member.get("state") == "pending bind":
+            pending.append(member)
+            continue
+        if member.get("tool_record_id") in bound:
+            continue  # loaded: in sync, nothing to report
+        requested.append(member)
+    return requested, pending
+
+
+def _requested_clause(requested):
+    """Render the ', N tool(s) requested: ...' suffix for the in-sync summary.
+    Each requested tool is named; a 'assign pocket <n>' suffix appears ONLY when
+    the member carries an asserted preferred number, otherwise the operator
+    picks the pocket (docs/ROUNDTRIP.md step 7)."""
+    parts = []
+    for member in requested:
+        name = _member_name(member)
+        pocket = _member_preferred_number(member)
+        if pocket is not None:
+            parts.append('"%s" - mount it and assign pocket %d' % (name, pocket))
+        else:
+            parts.append('"%s" - mount it and assign a pocket' % name)
+    noun = "tool" if len(requested) == 1 else "tools"
+    return ", %d %s requested: %s" % (len(requested), noun, "; ".join(parts))
+
+
+def _fetch_set_members(base_url, machine_id, api_key):
+    """C1: GET the tool set bound to this machine and return its members (the
+    union if more than one set is bound). A machine with no bound set - an empty
+    item list or a 404 - yields [], so the requested-tool report is purely
+    additive and a setless machine behaves exactly as before."""
+    try:
+        result = http_json(
+            "GET", "%s/api/v1/tool-set-records?machine_id=%s"
+            % (base_url, machine_id), api_key)
+    except ServerError as e:
+        if e.code == 404:
+            return []
+        raise
+    members = []
+    for tool_set in result.get("items", []):
+        members.extend((tool_set.get("canonical") or {}).get("members") or [])
+    return members
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -647,6 +748,9 @@ def sync_tool_table(config):
         server = {_entry_tool_number(e): e for e in http_json(
             "GET", "%s/api/v1/tool-table-entry-records?machine_id=%s"
             % (base_url, machine_id), api_key).get("items", [])}
+        # C1: also pull the tool set bound to this machine (if any), so we can
+        # surface members the operator still has to mount (requested).
+        set_members = _fetch_set_members(base_url, machine_id, api_key)
     except ServerUnreachable as e:
         log("Server not reachable, will retry next sync: %s" % e)
         return 0
@@ -790,7 +894,20 @@ def sync_tool_table(config):
         }
     _save_state(state_file, {"machine_id": machine_id, "tools": new_tools})
 
-    if not to_push and not to_write and not to_delete and not conflicts:
+    # C2/C3: classify the bound set's members against this machine's entries
+    # and fold any outstanding request (or pending bind) into the in-sync
+    # summary - an open request must NOT read as "nothing to do". The .tbl is
+    # never edited for a requested tool; fulfilment is the merge push above.
+    requested, pending = classify_set_members(set_members, server.values())
+    clean = not to_push and not to_write and not to_delete and not conflicts
+    if requested or pending:
+        summary = "%d tools in sync" % len(local_tools)
+        if requested:
+            summary += _requested_clause(requested)
+        if pending:
+            summary += ", %d pending bind" % len(pending)
+        log(summary)
+    elif clean:
         log("In sync - nothing to do")
     return 0
 

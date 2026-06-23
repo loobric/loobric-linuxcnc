@@ -51,6 +51,7 @@ class FakeServer:
         self.machine_name = "mill01"
         self.entries = {}  # tool_number -> sectioned entry
         self.syncs = 0
+        self.tool_set = None  # the set bound to this machine, or None
 
     # --- helpers the tests drive -------------------------------------------
 
@@ -120,6 +121,31 @@ class FakeServer:
                                           "source": self._src()}
         e["internal"]["version"] += 1
 
+    def make_set(self, members, name="millstone"):
+        """Bind a tool set to this machine. `members` is a list of
+        (tool_record_id, number, state) - number/state may be None.  A None
+        number is an unknown preference; an int is an asserted preference."""
+        out = []
+        for spec in members:
+            tool_record_id, number, state = (list(spec) + [None, None])[:3]
+            num = ({"value": number, "source": "asserted:freecad@bob"}
+                   if number is not None else {"value": None, "source": "unknown"})
+            member = {"tool_record_id": tool_record_id, "number": num}
+            if state is not None:
+                member["state"] = state
+            out.append(member)
+        self.tool_set = {
+            "internal": {"id": "set-1", "version": 1,
+                         "created_at": "t", "updated_at": "t"},
+            "canonical": {
+                "name": {"value": name, "source": "asserted:freecad@bob"},
+                "machine_id": {"value": self.machine_id,
+                               "source": "asserted:freecad@bob"},
+                "members": out,
+            },
+            "clients": {},
+        }
+
     # --- the wire ----------------------------------------------------------
 
     def http(self, method, url, api_key, body=None, timeout=10):
@@ -137,6 +163,8 @@ class FakeServer:
                 return {"internal": {"id": self.machine_id, "version": 1},
                         "canonical": {}, "clients": {}}
             raise sl.ServerError(404, "not found")
+        if method == "GET" and "/api/v1/tool-set-records" in url:
+            return {"items": [self.tool_set] if self.tool_set else []}
         if method == "GET" and "/api/v1/tool-table-entry-records" in url:
             return {"items": list(self.entries.values())}
         if method == "POST" and url.endswith("/tool-table-entry-records/sync"):
@@ -369,6 +397,122 @@ class BindingThenEditTest(SyncCycleTest):
             sl.sync_tool_table(self.cfg)
         self.assertFalse(any("CONFLICT" in m for m in logs), logs)
         self.assertAlmostEqual(self.server.offset(3, "z"), -48.137)
+
+
+class RequestedMembersTest(SyncCycleTest):
+    """smooth-linuxcnc#3: the controller surfaces set members the operator
+    must still mount (requested) and members mounted-but-not-yet-confirmed
+    (pending bind), folding them into the in-sync summary. It NEVER edits the
+    .tbl for a requested tool (fulfilment is the operator's mount + the
+    existing merge push)."""
+
+    def sync_with_logs(self):
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            code = sl.sync_tool_table(self.cfg)
+        return code, logs
+
+    def bound_for_local(self):
+        """Bind every local entry to an instance and return the id map."""
+        ids = {}
+        for n in self.server.entries:
+            iid = "inst-%d" % n
+            self.server.bind(n, iid)
+            ids[n] = iid
+        return ids
+
+    def test_requested_member_is_reported_with_pocket(self):
+        """A set member whose instance is not bound to any entry is requested;
+        with an asserted preferred number, the report names the pocket."""
+        self.run_sync()                       # server now has T3, T5
+        ids = self.bound_for_local()
+        # an 18th tool the machine doesn't have yet, preferred pocket 8
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", 8, None)])
+        code, logs = self.sync_with_logs()
+        self.assertEqual(code, 0)
+        summary = [m for m in logs if "requested" in m]
+        self.assertTrue(summary, logs)
+        self.assertIn("1 tool requested", summary[0])
+        self.assertIn('"inst-new"', summary[0])
+        self.assertIn("assign pocket 8", summary[0])
+        # NOT reported as "nothing to do" and the .tbl is untouched
+        self.assertFalse(any("nothing to do" in m for m in logs))
+        self.assertEqual(self.read_tbl(), TBL)
+
+    def test_pocket_clause_omitted_when_number_unknown(self):
+        """A requested member with no asserted preferred number names no
+        pocket - the operator chooses one."""
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", None, None)])
+        code, logs = self.sync_with_logs()
+        summary = [m for m in logs if "requested" in m][0]
+        self.assertIn('"inst-new"', summary)
+        self.assertIn("assign a pocket", summary)
+        self.assertNotIn("pocket 8", summary)
+        self.assertNotIn("assign pocket ", summary)
+
+    def test_all_members_bound_reports_no_request(self):
+        """When every member's instance is bound to a machine entry, there is
+        no request - the sync reads as a clean in-sync no-op."""
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None)])
+        code, logs = self.sync_with_logs()
+        self.assertEqual(code, 0)
+        self.assertFalse(any("requested" in m for m in logs), logs)
+        self.assertTrue(any("In sync" in m for m in logs))
+
+    def test_in_sync_summary_accounts_for_request(self):
+        """An outstanding request must not read as 'nothing to do'; the summary
+        counts the in-sync tools alongside the request."""
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", 8, None)])
+        code, logs = self.sync_with_logs()
+        self.assertFalse(any("nothing to do" in m for m in logs), logs)
+        self.assertTrue(any("2 tools in sync" in m and "requested" in m
+                            for m in logs), logs)
+
+    def test_pending_bind_reported(self):
+        """A member the server marks 'pending bind' (mounted, binding not yet
+        confirmed) is reported as pending bind, not as a request."""
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", 8, "pending bind")])
+        code, logs = self.sync_with_logs()
+        self.assertTrue(any("pending bind" in m for m in logs), logs)
+        self.assertFalse(any("requested" in m for m in logs), logs)
+
+    def test_no_bound_set_behaves_as_before(self):
+        """A machine with no bound set: no set fetch result, no request line."""
+        self.run_sync()
+        code, logs = self.sync_with_logs()
+        self.assertEqual(code, 0)
+        self.assertFalse(any("requested" in m for m in logs))
+        self.assertTrue(any("In sync" in m for m in logs))
+
+    def test_set_endpoint_404_is_swallowed(self):
+        """A 404 from the set endpoint (no set / unsupported filter) does not
+        abort the sync; it behaves as a setless machine."""
+        self.run_sync()
+        real_http = self.server.http
+
+        def http(method, url, api_key, body=None, timeout=10):
+            if method == "GET" and "/api/v1/tool-set-records" in url:
+                raise sl.ServerError(404, "not found")
+            return real_http(method, url, api_key, body, timeout)
+        logs = []
+        with mock.patch.object(sl, "http_json", http), \
+             mock.patch.object(sl, "log", logs.append):
+            code = sl.sync_tool_table(self.cfg)
+        self.assertEqual(code, 0)
+        self.assertTrue(any("In sync" in m for m in logs))
 
 
 if __name__ == "__main__":
