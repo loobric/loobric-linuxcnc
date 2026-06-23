@@ -40,7 +40,7 @@ LinuxCNC control boxes are often image-built on old distributions. This client:
 ### 1. Get the file onto the control box
 
 ```bash
-wget https://raw.githubusercontent.com/loobric/smooth-linuxcnc/main/smooth_linuxcnc.py
+wget https://raw.githubusercontent.com/loobric/smooth-linuxcnc/master/smooth_linuxcnc.py
 chmod +x smooth_linuxcnc.py
 ```
 
