@@ -4,6 +4,16 @@ All notable changes to **smooth-linuxcnc** (the LinuxCNC controller-side client
 for Smooth) are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-06-23
+
+### Added
+- The controller surfaces tools the operator must still mount. A member of the
+  machine's bound tool set with no entry yet is reported as **requested** — named
+  by both its human name and its full instance id (the id disambiguates tools
+  that share a name), with a target pocket when one is preferred — and as
+  **pending bind** once mounted but not yet confirmed. These fold into the sync
+  summary, so an outstanding request never reads as "nothing to do".
+
 ## [0.3.0] — 2026-06-19
 
 The v2 client, aligned to the sectioned tool schema.

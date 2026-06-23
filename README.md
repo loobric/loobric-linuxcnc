@@ -13,9 +13,16 @@ server in step, both directions:
 - **Server → machine:** changes to **bound** entries are written back into the
   table — line-surgically (your comments survive), with a timestamped backup
   first. Unbound entries never write back.
-- **Never a guess:** entries pair with CAM tool records on the server (review
-  inbox), and a tool changed on *both* sides between syncs is reported as a
+- **Never a guess:** entries pair with CAM tool records on the server (the
+  Inbox), and a tool changed on *both* sides between syncs is reported as a
   conflict touching neither — resolve by re-editing one side.
+- **Tells you what to load:** when a tool set bound to this machine asks for a
+  tool the table doesn't have yet, sync reports it as **requested** — named by
+  both its human name and its full instance id, with a target pocket when the set
+  states one — so the operator knows exactly what to mount. Once it's mounted the
+  next sync reads **pending bind** until the binding is confirmed on the server,
+  then folds back into "in sync". An outstanding request never reads as
+  "nothing to do".
 
 ## Design constraints (why this is one file)
 
@@ -68,6 +75,14 @@ Environment variables with the same names override the file.
 ```
 
 The machine is created on the server on first contact.
+
+Once the table is pushed, a `sync` still tells you what the bench owes — an
+open load request is folded into the in-sync summary, not hidden behind
+"nothing to do":
+
+```
+[2026-06-09 12:05:00] 5 tools in sync, 1 tool requested: "1/4 downcut" (inst-7f3a91) - mount it and assign pocket 5
+```
 
 ### 4. Automate (cron)
 

@@ -54,7 +54,7 @@ import urllib.request
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/smooth/linuxcnc.conf")
 HTTP_TIMEOUT = 10  # seconds
 CLIENT_NAME = "linuxcnc"
-CLIENT_VERSION = "0.3.0"
+CLIENT_VERSION = "0.4.0"
 
 
 class ToolTableError(Exception):
