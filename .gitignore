@@ -53,3 +53,6 @@ OPEN_CORE.md
 
 # Test scripts (temporary)
 scripts/init_test_db.py
+
+# Local agent config / memory (not version-controlled)
+.claude/
