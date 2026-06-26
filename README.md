@@ -61,6 +61,12 @@ LINUXCNC_INI="/home/user/linuxcnc/configs/mill/mill.ini"   # tool table found vi
 
 Environment variables with the same names override the file.
 
+> **Trying the sandbox?** Point at the free hosted server with
+> `SMOOTH_API_URL="https://api.loobric.com"` and an API key you create with the
+> Python client (`pip install loobric-smooth`; see
+> [loobric-smooth/docs/SANDBOX.md](https://github.com/loobric/loobric-smooth/blob/master/docs/SANDBOX.md)).
+> The sandbox is a shared playground — keep nothing real there.
+
 ### 3. Sync
 
 ```bash
