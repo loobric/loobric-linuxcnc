@@ -676,10 +676,7 @@ SMOOTH_API_KEY=""
 # A name for THIS machine. Created on the server on first contact (required).
 MACHINE_NAME="mill01"
 
-# Point at your LinuxCNC INI; the tool table is discovered from it.
-LINUXCNC_INI="%(ini)s"
-# ...or point straight at the table instead and delete LINUXCNC_INI above:
-# TOOL_TABLE="/home/user/linuxcnc/configs/mill/tool.tbl"
+%(ini_block)s
 
 # Optional.
 # UNITS="mm"                   # offset units, default mm
@@ -689,29 +686,81 @@ LINUXCNC_INI="%(ini)s"
 INI_PLACEHOLDER = "/home/user/linuxcnc/configs/mill/mill.ini"
 
 
-def _discover_ini():
-    """Best-effort guess at the operator's LinuxCNC INI, to prefill `init`.
+def _discover_inis():
+    """All of the operator's LinuxCNC INIs, to prefill `init`.
 
-    Scans the standard ~/linuxcnc/configs/<config>/<name>.ini layout. Returns
-    the first match (sorted for determinism) or None.
+    Scans the standard ~/linuxcnc/configs/<config>/<name>.ini layout. Returns a
+    sorted list (deterministic order) — possibly empty.
     """
     pattern = os.path.join(os.path.expanduser("~"), "linuxcnc", "configs", "*", "*.ini")
-    matches = sorted(glob.glob(pattern))
-    return matches[0] if matches else None
+    return sorted(glob.glob(pattern))
 
 
-def cmd_init(path, force=False):
+def _choose_ini(inis):
+    """Pick which discovered INI to activate in a new config.
+
+    None found -> the placeholder path. One -> use it. Several -> ask, but only
+    when we have a terminal to ask at; otherwise take the first (the rest are
+    written as commented alternatives regardless, so nothing is lost).
+    """
+    if not inis:
+        return INI_PLACEHOLDER
+    if len(inis) == 1:
+        return inis[0]
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        print("Found several LinuxCNC configs:")
+        for i, ini in enumerate(inis, 1):
+            print("  %d) %s" % (i, ini))
+        try:
+            answer = input("Which one is this machine? [1-%d, Enter=1] "
+                           % len(inis)).strip()
+        except EOFError:
+            answer = ""
+        if answer:
+            try:
+                idx = int(answer)
+                if 1 <= idx <= len(inis):
+                    return inis[idx - 1]
+            except ValueError:
+                pass
+            print("Not a valid choice; using the first - edit the config to change it.")
+    return inis[0]
+
+
+def _ini_block(inis, chosen):
+    """Render the LINUXCNC_INI / TOOL_TABLE section of the config.
+
+    `chosen` is activated; every other discovered INI is written as a commented
+    LINUXCNC_INI line, so switching machines is un/commenting a line rather than
+    retyping a path.
+    """
+    lines = ["# Point at your LinuxCNC INI; the tool table is discovered from it."]
+    others = [ini for ini in inis if ini != chosen]
+    if others:
+        lines.append("# Several configs were found - the active one is below; to use")
+        lines.append("# another, comment this line out and uncomment that one.")
+    lines.append('LINUXCNC_INI="%s"' % chosen)
+    lines.extend('# LINUXCNC_INI="%s"' % ini for ini in others)
+    lines.append("# ...or point straight at the table instead and delete LINUXCNC_INI above:")
+    lines.append('# TOOL_TABLE="/home/user/linuxcnc/configs/mill/tool.tbl"')
+    return "\n".join(lines)
+
+
+def cmd_init(path, force=False, ini=None):
     """Write a starter config file (mode 0600 — it holds an API key).
 
     Refuses to clobber an existing file unless --force, so a stray `init` can
-    never wipe a working setup. Returns a process exit code (0 ok, 2 refused).
+    never wipe a working setup. `ini` (from --ini) forces a specific INI and
+    skips discovery/prompting, for scripted installs. Returns a process exit
+    code (0 ok, 2 refused).
     """
     if os.path.exists(path) and not force:
         log("Config already exists: %s (use --force to overwrite)" % path)
         return 2
 
-    discovered = _discover_ini()
-    content = CONFIG_TEMPLATE % {"ini": discovered or INI_PLACEHOLDER}
+    inis = _discover_inis()
+    chosen = ini if ini else _choose_ini(inis)
+    content = CONFIG_TEMPLATE % {"ini_block": _ini_block(inis, chosen)}
 
     config_dir = os.path.dirname(path)
     if config_dir:
@@ -724,8 +773,11 @@ def cmd_init(path, force=False):
     os.chmod(path, 0o600)
 
     log("Wrote starter config: %s" % path)
-    if discovered:
-        log("Prefilled LINUXCNC_INI from a discovered config: %s" % discovered)
+    if chosen != INI_PLACEHOLDER:
+        log("Set LINUXCNC_INI to: %s" % chosen)
+    others = len([i for i in inis if i != chosen])
+    if others:
+        log("%d other config(s) listed in the file as commented alternatives" % others)
     log("Edit it (server URL, API key, machine name), then run: smooth-linuxcnc doctor")
     return 0
 
@@ -1145,6 +1197,8 @@ def build_parser():
     init_p = sub.add_parser("init", help="write a starter config file, then exit")
     init_p.add_argument("--force", action="store_true",
                         help="overwrite an existing config file")
+    init_p.add_argument("--ini", metavar="PATH",
+                        help="use this LinuxCNC INI (skips discovery/prompt)")
     sub.add_parser("doctor", help="check configuration and server connectivity")
     return parser
 
@@ -1159,7 +1213,7 @@ def main(argv):
 
     config_path = args.config
     if args.command == "init":
-        return cmd_init(config_path, force=args.force)
+        return cmd_init(config_path, force=args.force, ini=args.ini)
 
     config = load_config(config_path)
     if args.url:

@@ -68,8 +68,12 @@ smooth-linuxcnc init
 ```
 
 This writes a commented `~/.config/smooth/linuxcnc.conf` (mode 600 — it will hold
-your API key) and, if it can find one, prefills your LinuxCNC INI path. Open it
-and fill in the server URL, API key, and machine name:
+your API key) and prefills your LinuxCNC INI path. If you have **several** configs
+under `~/linuxcnc/configs/`, it asks which machine this is (and writes the rest as
+commented alternatives, so you can switch later by un/commenting a line). For a
+scripted, no-prompt install, name it directly: `smooth-linuxcnc init --ini PATH`.
+
+Open the file and fill in the server URL, API key, and machine name:
 
 ```bash
 SMOOTH_API_URL="http://nas.local:8000"
