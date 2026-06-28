@@ -9,12 +9,16 @@ for Smooth) are recorded here. This project adheres to
 Less startup friction, same single-file promise.
 
 ### Added
-- **`init`** writes a commented starter config to `~/.config/smooth/linuxcnc.conf`
-  (mode 600 — it holds an API key) so you edit a file instead of authoring one
-  from scratch. It refuses to clobber an existing config without `--force`, and
-  prefills `LINUXCNC_INI` from a discovered `~/linuxcnc/configs/*/*.ini`. When
-  **several** configs exist it asks which machine this is (and writes the rest as
-  commented alternatives); `--ini PATH` names one directly for scripted installs.
+- **`init`** is an interactive setup wizard: it prompts for the server URL
+  (defaulting to the `api.loobric.com` sandbox, with a not-for-production
+  warning), an API key (blank allowed, with in-file notes on creating one later),
+  a machine name (defaulting to the hostname), and — when several
+  `~/linuxcnc/configs/*/*.ini` exist — which machine this is (writing the rest as
+  commented alternatives). It then offers to run `doctor`. The result is written
+  to `~/.config/smooth/linuxcnc.conf` (mode 600 — it holds an API key), never
+  clobbering an existing config without `--force`. Non-interactive runs take every
+  default without blocking; `--ini PATH` names a config directly for scripted
+  installs.
 - **`doctor`** validates config, resolves and parses the tool table, and confirms
   the server is reachable and the API key works — a green/red checklist so setup
   problems surface there instead of in a cron log. Any HTTP response counts as

@@ -663,18 +663,18 @@ CONFIG_TEMPLATE = """\
 # Environment variables of the same name override these. So does --url and a
 # positional machine name on the command line.
 
-# Where your Smooth server lives (required).
-SMOOTH_API_URL="http://nas.local:8000"
+%(url_block)s
 
-# API key for a multi-user server. Create one with the Python client:
+# API key for a multi-user server. Leave blank if you don't have one yet -
+# create an account and key through the web UI, or with the Python client:
 #   pip install loobric-smooth
 #   smooth --url "<your server url>" register      # first time only
 #   smooth --url "<your server url>" create-key
 # Leave blank against a solo-mode server.
-SMOOTH_API_KEY=""
+SMOOTH_API_KEY="%(key)s"
 
 # A name for THIS machine. Created on the server on first contact (required).
-MACHINE_NAME="mill01"
+MACHINE_NAME="%(machine)s"
 
 %(ini_block)s
 
@@ -684,6 +684,37 @@ MACHINE_NAME="mill01"
 """
 
 INI_PLACEHOLDER = "/home/user/linuxcnc/configs/mill/mill.ini"
+SANDBOX_URL = "https://api.loobric.com"
+
+
+def _interactive():
+    """True only when we can actually hold a conversation with the operator."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _prompt(question, default=None):
+    """Ask a question, returning the answer or `default`.
+
+    Non-interactive (no tty) returns `default` without blocking, so a scripted
+    or cron-driven `init` never hangs on a prompt.
+    """
+    if not _interactive():
+        return default
+    suffix = " [%s] " % default if default else " "
+    try:
+        answer = input(question + suffix).strip()
+    except EOFError:
+        return default
+    return answer or default
+
+
+def _default_machine_name():
+    """A sensible default machine name — the box's hostname, else 'mill01'."""
+    try:
+        name = socket.gethostname()
+    except OSError:
+        name = ""
+    return name or "mill01"
 
 
 def _discover_inis():
@@ -707,7 +738,7 @@ def _choose_ini(inis):
         return INI_PLACEHOLDER
     if len(inis) == 1:
         return inis[0]
-    if sys.stdin.isatty() and sys.stdout.isatty():
+    if _interactive():
         print("Found several LinuxCNC configs:")
         for i, ini in enumerate(inis, 1):
             print("  %d) %s" % (i, ini))
@@ -725,6 +756,16 @@ def _choose_ini(inis):
                 pass
             print("Not a valid choice; using the first - edit the config to change it.")
     return inis[0]
+
+
+def _url_block(url):
+    """Render the SMOOTH_API_URL section, flagging the sandbox in a comment."""
+    lines = ["# Where your Smooth server lives (required)."]
+    if url.rstrip("/") == SANDBOX_URL:
+        lines.append("# NOTE: api.loobric.com is a shared SANDBOX - a playground for")
+        lines.append("# trying things out. Do NOT use it for production tool data.")
+    lines.append('SMOOTH_API_URL="%s"' % url)
+    return "\n".join(lines)
 
 
 def _ini_block(inis, chosen):
@@ -747,20 +788,49 @@ def _ini_block(inis, chosen):
 
 
 def cmd_init(path, force=False, ini=None):
-    """Write a starter config file (mode 0600 — it holds an API key).
+    """Set up a config file, interactively when there's a terminal.
 
+    Walks the operator through server URL, API key, machine name, and (when
+    several exist) which LinuxCNC config this is, then offers to run `doctor`.
     Refuses to clobber an existing file unless --force, so a stray `init` can
     never wipe a working setup. `ini` (from --ini) forces a specific INI and
-    skips discovery/prompting, for scripted installs. Returns a process exit
-    code (0 ok, 2 refused).
+    skips its discovery/prompt. Non-interactive runs take every default without
+    blocking. Returns a process exit code (0 ok, 2 refused).
     """
     if os.path.exists(path) and not force:
         log("Config already exists: %s (use --force to overwrite)" % path)
         return 2
 
+    if _interactive():
+        print("Smooth LinuxCNC client setup - press Enter to accept each [default].\n")
+
+    # Server URL — default to the sandbox, but say plainly what it is.
+    url = _prompt("Smooth server URL?", default=SANDBOX_URL) or SANDBOX_URL
+    if url.rstrip("/") == SANDBOX_URL and _interactive():
+        print("  ! %s is a shared SANDBOX - for trying things out, not "
+              "production.\n" % SANDBOX_URL)
+
+    # API key — blank is fine; the file's comments say how to make one later.
+    if _interactive():
+        print("API key for a multi-user server. Leave blank if you don't have one")
+        print("yet (create it via the web UI or `smooth create-key`); blank is also")
+        print("correct against a solo-mode server.")
+    key = _prompt("API key?", default="") or ""
+
+    # Machine name — default to the hostname.
+    machine = _prompt("Name for THIS machine?",
+                      default=_default_machine_name()) or _default_machine_name()
+
+    # LinuxCNC config — discover, and let _choose_ini ask if there are several.
     inis = _discover_inis()
     chosen = ini if ini else _choose_ini(inis)
-    content = CONFIG_TEMPLATE % {"ini_block": _ini_block(inis, chosen)}
+
+    content = CONFIG_TEMPLATE % {
+        "url_block": _url_block(url),
+        "key": key,
+        "machine": machine,
+        "ini_block": _ini_block(inis, chosen),
+    }
 
     config_dir = os.path.dirname(path)
     if config_dir:
@@ -772,13 +842,22 @@ def cmd_init(path, force=False, ini=None):
         f.write(content)
     os.chmod(path, 0o600)
 
-    log("Wrote starter config: %s" % path)
+    log("Wrote config: %s" % path)
     if chosen != INI_PLACEHOLDER:
         log("Set LINUXCNC_INI to: %s" % chosen)
     others = len([i for i in inis if i != chosen])
     if others:
         log("%d other config(s) listed in the file as commented alternatives" % others)
-    log("Edit it (server URL, API key, machine name), then run: smooth-linuxcnc doctor")
+
+    # Offer to verify the setup right away. doctor's own exit code is its
+    # business; init succeeded the moment it wrote the file, so return 0.
+    if _interactive():
+        answer = _prompt("Run 'doctor' now to check it? [Y/n]", default="Y") or "Y"
+        if answer[:1].lower() == "y":
+            print()
+            cmd_doctor(load_config(path), path)
+            return 0
+    log("Next: edit anything you skipped, then run: smooth-linuxcnc doctor")
     return 0
 
 

@@ -61,38 +61,34 @@ chmod +x smooth_linuxcnc.py
 Every command below works either way — as `smooth-linuxcnc <cmd>` (installed) or
 `./smooth_linuxcnc.py <cmd>` (single file).
 
-### 2. Write a config, then edit it
+### 2. Run the setup wizard
 
 ```bash
 smooth-linuxcnc init
 ```
 
-This writes a commented `~/.config/smooth/linuxcnc.conf` (mode 600 — it will hold
-your API key) and prefills your LinuxCNC INI path. If you have **several** configs
-under `~/linuxcnc/configs/`, it asks which machine this is (and writes the rest as
-commented alternatives, so you can switch later by un/commenting a line). For a
-scripted, no-prompt install, name it directly: `smooth-linuxcnc init --ini PATH`.
+`init` walks you through it, prompting for:
 
-Open the file and fill in the server URL, API key, and machine name:
+- **Server URL** — defaults to the hosted `https://api.loobric.com` **sandbox**
+  (a shared playground — keep nothing real there; point at your own NAS/LAN
+  server for production).
+- **API key** — leave it blank if you don't have one yet. Create an account and
+  key through the web UI or the Python client (`pip install loobric-smooth`;
+  `smooth register` then `smooth create-key` — see
+  [loobric-smooth/docs/SANDBOX.md](https://github.com/loobric/loobric-smooth/blob/master/docs/SANDBOX.md)),
+  then paste it into the config later. Blank is also correct for a solo-mode server.
+- **Machine name** — defaults to this box's hostname.
+- **LinuxCNC config** — auto-discovered from `~/linuxcnc/configs/`. If you have
+  **several**, it asks which machine this is and writes the rest as commented
+  alternatives, so you can switch later by un/commenting a line.
 
-```bash
-SMOOTH_API_URL="http://nas.local:8000"
-SMOOTH_API_KEY="your-api-key"        # leave blank against a solo-mode server
-MACHINE_NAME="mill01"
-LINUXCNC_INI="/home/user/linuxcnc/configs/mill/mill.ini"   # tool table found via INI
-# or point at the table directly:
-# TOOL_TABLE="/home/user/linuxcnc/configs/mill/tool.tbl"
-# UNITS="mm"                         # offset units, default mm
-# LOG_DIR="/tmp/smooth-sync"         # optional log files
-```
-
-Environment variables with the same names override the file, as do `--url` and a
+It writes `~/.config/smooth/linuxcnc.conf` (mode 600 — it holds your API key) and
+offers to run `doctor` right away. You can re-open the file any time to change a
+value; environment variables of the same name override it, as do `--url` and a
 positional machine name on the command line.
 
-> **Trying the sandbox?** Set `SMOOTH_API_URL="https://api.loobric.com"` and an
-> API key you create with the Python client (`pip install loobric-smooth`; see
-> [loobric-smooth/docs/SANDBOX.md](https://github.com/loobric/loobric-smooth/blob/master/docs/SANDBOX.md)).
-> The sandbox is a shared playground — keep nothing real there.
+Non-interactive (no terminal)? `init` takes every default without prompting. For
+a scripted install, name the INI explicitly: `smooth-linuxcnc init --ini PATH`.
 
 ### 3. Check your setup
 
