@@ -62,7 +62,7 @@ import urllib.request
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/smooth/linuxcnc.conf")
 HTTP_TIMEOUT = 10  # seconds
 CLIENT_NAME = "linuxcnc"
-CLIENT_VERSION = "0.5.0"
+CLIENT_VERSION = "0.6.0"
 
 
 class ToolTableError(Exception):
@@ -394,6 +394,45 @@ def _requested_clause(requested):
     return ", %d %s requested: %s" % (len(requested), noun, "; ".join(parts))
 
 
+def _build_status_summary(requested, pending, local_count):
+    """The operator-facing status the panel reads from the state file. It is a
+    projection of what the sync already computed - no extra work - so the GUI
+    and the CLI never disagree about the machine's state.
+
+    health: red    = a tool must be mounted (an outstanding request),
+            yellow = in sync but a bind is still pending,
+            green  = fully in sync.
+    message is the same one-line summary the CLI logs; `requested` is the
+    structured list (name/id/preferred pocket) for a richer panel display."""
+    if requested:
+        health = "red"
+    elif pending:
+        health = "yellow"
+    else:
+        health = "green"
+    if requested or pending:
+        message = "%d tools in sync" % local_count
+        if requested:
+            message += _requested_clause(requested)
+        if pending:
+            message += ", %d pending bind" % len(pending)
+    else:
+        message = "In sync - nothing to do"
+    return {
+        "health": health,
+        "message": message,
+        "requested": [
+            {"name": m.get("name"),
+             "tool_record_id": m.get("tool_record_id"),
+             "preferred_number": _member_preferred_number(m)}
+            for m in requested
+        ],
+        "pending": len(pending),
+        "last_sync": time.time(),
+        "last_sync_local": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 def _fetch_set_members(base_url, machine_id, api_key):
     """C1: GET the tool set bound to this machine and return its members (the
     union if more than one set is bound). A machine with no bound set - an empty
@@ -423,7 +462,7 @@ def _fetch_instance_label(base_url, instance_id, api_key):
     try:
         rec = http_json("GET", "%s/api/v1/tool-instance-records/%s"
                         % (base_url, instance_id), api_key)
-    except ServerError:
+    except (ServerError, ServerUnreachable):
         return None
     return ((rec.get("canonical") or {}).get("name") or {}).get("value")
 
@@ -980,8 +1019,13 @@ def _load_state(path):
 
 
 def _save_state(path, state):
-    with open(path, "w") as f:
+    # Atomic write: the operator panel polls this file concurrently, so a
+    # partial read of an in-progress write would raise a JSON error. Write a
+    # temp file and rename it - os.replace is atomic on the same filesystem.
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(tmp, path)
 
 
 def _entry_to_local_overlay(tool, entry):
@@ -1206,6 +1250,24 @@ def sync_tool_table(config):
         log("Removed %d tool(s) deleted locally: T%s"
             % (len(removed), ", T".join(str(n) for n in removed)))
 
+    # C2/C3: classify the bound set's members against this machine's entries
+    # and fold any outstanding request (or pending bind) into the in-sync
+    # summary - an open request must NOT read as "nothing to do". The .tbl is
+    # never edited for a requested tool; fulfilment is the merge push above.
+    # This runs BEFORE the save so the operator status lands in the state file
+    # the panel reads (one file, one source of truth).
+    requested, pending = classify_set_members(set_members, server.values())
+    # Resolve a human-recognizable name for each requested member so the operator
+    # sees e.g. "M8" rather than the bare instance id (the set member carries
+    # only the id). Falls back to the id when the instance has no name.
+    for member in requested:
+        if not member.get("name"):
+            label = _fetch_instance_label(
+                base_url, member.get("tool_record_id"), api_key)
+            if label:
+                member["name"] = label
+    summary = _build_status_summary(requested, pending, len(local_tools))
+
     # record the new baseline (conflicted tools keep their OLD baseline so
     # they are re-detected next sync)
     new_tools = {}
@@ -1220,30 +1282,12 @@ def sync_tool_table(config):
             "local_line": local_lines[n],
             "server_fields": _entry_offsets(entry) if entry else None,
         }
-    _save_state(state_file, {"machine_id": machine_id, "tools": new_tools})
+    _save_state(state_file, {"machine_id": machine_id, "tools": new_tools,
+                             "summary": summary})
 
-    # C2/C3: classify the bound set's members against this machine's entries
-    # and fold any outstanding request (or pending bind) into the in-sync
-    # summary - an open request must NOT read as "nothing to do". The .tbl is
-    # never edited for a requested tool; fulfilment is the merge push above.
-    requested, pending = classify_set_members(set_members, server.values())
-    # Resolve a human-recognizable name for each requested member so the operator
-    # sees e.g. "M8" rather than the bare instance id (the set member carries
-    # only the id). Falls back to the id when the instance has no name.
-    for member in requested:
-        if not member.get("name"):
-            label = _fetch_instance_label(
-                base_url, member.get("tool_record_id"), api_key)
-            if label:
-                member["name"] = label
     clean = not to_push and not to_write and not to_delete and not conflicts
     if requested or pending:
-        summary = "%d tools in sync" % len(local_tools)
-        if requested:
-            summary += _requested_clause(requested)
-        if pending:
-            summary += ", %d pending bind" % len(pending)
-        log(summary)
+        log(summary["message"])
     elif clean:
         log("In sync - nothing to do")
     return 0

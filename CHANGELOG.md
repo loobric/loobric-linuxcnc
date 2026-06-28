@@ -4,6 +4,31 @@ All notable changes to **smooth-linuxcnc** (the LinuxCNC controller-side client
 for Smooth) are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-06-28
+
+Make the sync visible to the operator at the machine.
+
+### Added
+- **Operator status in the state file**: every `sync` now records an
+  operator-facing `summary` in `state-<machine>.json` — a `health`
+  (`green` in sync / `yellow` bind pending / `red` a tool is requested), the
+  same one-line message the CLI logs, the structured `requested` list
+  (name, instance id, preferred pocket), a `pending` count, and a `last_sync`
+  timestamp. The classification was already computed on every sync and only
+  logged; it is now persisted so a GUI can surface it without re-querying the
+  server.
+- **GladeVCP status panel** (`examples/sim.axis.smooth/`): a tool-table sync is
+  invisible when the client runs from cron, so this panel surfaces it inside a
+  running LinuxCNC GUI. A colored indicator (green/yellow/red, plus grey when the
+  last sync is stale) and a message/tooltip show what — if anything — the
+  operator must mount; a **Sync** button runs `smooth-linuxcnc sync` (the same
+  command cron runs). The panel only reads the state file and requests a sync; it
+  never edits the tool table or intercepts M6.
+
+### Changed
+- **`state-<machine>.json` is written atomically** (temp file + rename) so a
+  concurrent reader (the panel) never sees a half-written file.
+
 ## [0.5.0] — 2026-06-28
 
 Less startup friction, same single-file promise.

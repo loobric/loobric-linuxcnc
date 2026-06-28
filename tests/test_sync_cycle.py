@@ -549,5 +549,69 @@ class RequestedMembersTest(SyncCycleTest):
         self.assertTrue(any("In sync" in m for m in logs))
 
 
+class PersistedSummaryTest(SyncCycleTest):
+    """The sync persists an operator-facing `summary` (health/message) into the
+    state file so the GladeVCP panel can surface it without re-querying the
+    server. health: green = in sync, yellow = pending bind, red = requested."""
+
+    def sync_with_logs(self):
+        logs = []
+        with mock.patch.object(sl, "http_json", self.server.http), \
+             mock.patch.object(sl, "log", logs.append):
+            code = sl.sync_tool_table(self.cfg)
+        return code, logs
+
+    def bound_for_local(self):
+        ids = {}
+        for n in self.server.entries:
+            iid = "inst-%d" % n
+            self.server.bind(n, iid)
+            ids[n] = iid
+        return ids
+
+    def read_summary(self):
+        import json
+        path = sl._state_path(self.cfg, "mill01")
+        with open(path) as f:
+            return json.load(f).get("summary")
+
+    def test_clean_sync_writes_green_summary(self):
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None)])
+        self.sync_with_logs()
+        summary = self.read_summary()
+        self.assertEqual(summary["health"], "green")
+        self.assertEqual(summary["requested"], [])
+        self.assertEqual(summary["pending"], 0)
+        self.assertIn("last_sync", summary)
+
+    def test_request_writes_red_summary_with_detail(self):
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.set_instance("inst-new", name="M8")
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", 8, None)])
+        self.sync_with_logs()
+        summary = self.read_summary()
+        self.assertEqual(summary["health"], "red")
+        self.assertIn("requested", summary["message"])
+        self.assertEqual(len(summary["requested"]), 1)
+        req = summary["requested"][0]
+        self.assertEqual(req["name"], "M8")
+        self.assertEqual(req["tool_record_id"], "inst-new")
+        self.assertEqual(req["preferred_number"], 8)
+
+    def test_pending_bind_writes_yellow_summary(self):
+        self.run_sync()
+        ids = self.bound_for_local()
+        self.server.make_set([(ids[3], None, None), (ids[5], None, None),
+                              ("inst-new", 8, "pending bind")])
+        self.sync_with_logs()
+        summary = self.read_summary()
+        self.assertEqual(summary["health"], "yellow")
+        self.assertEqual(summary["pending"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

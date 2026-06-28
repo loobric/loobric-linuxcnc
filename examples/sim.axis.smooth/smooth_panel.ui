@@ -1,21 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
-  <requires lib="gtk+" version="2.24"/>
+  <requires lib="gtk+" version="3.0"/>
   <object class="GtkWindow" id="window1">
-    <property name="width_request">200</property>
-    <property name="height_request">100</property>
-    <property name="title" translatable="yes">Smooth Panel</property>
+    <property name="title" translatable="yes">Smooth</property>
     <child>
-      <object class="GtkVBox" id="vbox1">
+      <object class="GtkBox" id="smooth_panel">
         <property name="visible">True</property>
-        <property name="spacing">10</property>
-        <property name="border_width">10</property>
+        <property name="orientation">vertical</property>
+        <property name="spacing">8</property>
+        <property name="border_width">8</property>
         <child>
-          <object class="GtkButton" id="toggle_button">
-            <property name="label" translatable="yes">Toggle LED</property>
+          <object class="GtkLabel" id="led">
             <property name="visible">True</property>
-            <signal name="pressed" handler="on_button_press" after="yes"/>
-            <signal name="released" handler="on_button_release" after="yes"/>
+            <property name="label">--</property>
+            <property name="width_request">120</property>
+            <property name="height_request">40</property>
           </object>
           <packing>
             <property name="expand">False</property>
@@ -24,11 +23,11 @@
           </packing>
         </child>
         <child>
-          <object class="GtkLabel" id="led">
+          <object class="GtkLabel" id="message">
             <property name="visible">True</property>
-            <property name="label">LED</property>
-            <property name="width-request">50</property>
-            <property name="height-request">30</property>
+            <property name="label">No sync yet</property>
+            <property name="wrap">True</property>
+            <property name="xalign">0</property>
           </object>
           <packing>
             <property name="expand">True</property>
@@ -37,27 +36,15 @@
           </packing>
         </child>
         <child>
-          <object class="GtkButton" id="backup_button">
-            <property name="label" translatable="yes">Backup Tool Table</property>
+          <object class="GtkButton" id="sync_button">
+            <property name="label" translatable="yes">Sync</property>
             <property name="visible">True</property>
-            <signal name="clicked" handler="on_backup_button_click" after="yes"/>
+            <signal name="clicked" handler="on_sync_clicked"/>
           </object>
           <packing>
             <property name="expand">False</property>
             <property name="fill">True</property>
             <property name="position">2</property>
-          </packing>
-        </child>
-        <child>
-          <object class="GtkButton" id="pull_button">
-            <property name="label" translatable="yes">Pull Tool Table</property>
-            <property name="visible">True</property>
-            <signal name="clicked" handler="on_pull_button_click" after="yes"/>
-          </object>
-          <packing>
-            <property name="expand">False</property>
-            <property name="fill">True</property>
-            <property name="position">3</property>
           </packing>
         </child>
       </object>
