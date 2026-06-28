@@ -62,7 +62,7 @@ import urllib.request
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/smooth/linuxcnc.conf")
 HTTP_TIMEOUT = 10  # seconds
 CLIENT_NAME = "linuxcnc"
-CLIENT_VERSION = "0.6.0"
+CLIENT_VERSION = "0.6.1"
 
 
 class ToolTableError(Exception):
@@ -544,6 +544,11 @@ def http_json(method, url, api_key, body=None, timeout=HTTP_TIMEOUT):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Content-Type", "application/json")
+    request.add_header("Accept", "application/json")
+    # urllib otherwise sends "User-Agent: Python-urllib/X.Y", a signature
+    # Cloudflare's WAF blocks with a 403 (error 1010). Identify ourselves
+    # instead - this is also how the request shows up in server logs.
+    request.add_header("User-Agent", "smooth-linuxcnc/%s" % CLIENT_VERSION)
     if api_key:
         request.add_header("Authorization", "Bearer %s" % api_key)
     try:

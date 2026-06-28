@@ -4,6 +4,17 @@ All notable changes to **smooth-linuxcnc** (the LinuxCNC controller-side client
 for Smooth) are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-06-28
+
+### Fixed
+- **Cloudflare 403 (error 1010) on every request**: the client used
+  `urllib.request`, which sends `User-Agent: Python-urllib/X.Y` — a signature
+  Cloudflare's WAF blocks in front of `api.loobric.com`. Requests now send an
+  explicit `User-Agent: smooth-linuxcnc/<version>` (and an `Accept:
+  application/json` header), so the sync reaches the server. (The core and
+  FreeCAD clients use `http.client`, send no such signature, and were
+  unaffected.)
+
 ## [0.6.0] — 2026-06-28
 
 Make the sync visible to the operator at the machine.
