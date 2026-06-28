@@ -14,11 +14,17 @@ with no pip installs and must NEVER block or break the machine:
 - Bad usage or missing configuration -> log it, exit 2
 
 Usage:
-    smooth_linuxcnc.py sync [machine-name]   # full cycle: push + pull (cron this)
-    smooth_linuxcnc.py push [machine-name]   # one-way: table -> server only
+    smooth-linuxcnc init [--force]            # write a starter config, then edit it
+    smooth-linuxcnc doctor                    # check config + server connectivity
+    smooth-linuxcnc sync [machine-name]       # full cycle: push + pull (cron this)
+    smooth-linuxcnc push [machine-name]       # one-way: table -> server only
+
+Run via the installed `smooth-linuxcnc` command (pip install) or the single file
+directly (`./smooth_linuxcnc.py ...`) — both behave identically.
 
 Configuration: ~/.config/smooth/linuxcnc.conf (shell-style KEY="value",
-compatible with the v1 format), overridable via environment variables:
+compatible with the v1 format). Create it with `init`, then edit. Overridable
+via environment variables, and --url / a positional machine name on the CLI:
 
     SMOOTH_API_URL="http://nas.local:8000"
     SMOOTH_API_KEY="your-api-key"      # not needed against a solo-mode server
@@ -41,6 +47,8 @@ offsets read back as `canonical.offsets.<key>.{value,unit,source}`, and an entry
 is "bound" when `canonical.bound_instance_id.value` is not null.
 """
 
+import argparse
+import glob
 import json
 import os
 import re
@@ -54,7 +62,7 @@ import urllib.request
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/smooth/linuxcnc.conf")
 HTTP_TIMEOUT = 10  # seconds
 CLIENT_NAME = "linuxcnc"
-CLIENT_VERSION = "0.4.0"
+CLIENT_VERSION = "0.5.0"
 
 
 class ToolTableError(Exception):
@@ -645,9 +653,178 @@ def push_tool_table(config):
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# init — write a starter config so the user edits instead of authoring
 # ---------------------------------------------------------------------------
 
+CONFIG_TEMPLATE = """\
+# Smooth LinuxCNC client configuration.
+# Edit the values below, then check them with:  smooth-linuxcnc doctor
+#
+# Environment variables of the same name override these. So does --url and a
+# positional machine name on the command line.
+
+# Where your Smooth server lives (required).
+SMOOTH_API_URL="http://nas.local:8000"
+
+# API key for a multi-user server. Create one with the Python client:
+#   pip install loobric-smooth
+#   smooth --url "<your server url>" register      # first time only
+#   smooth --url "<your server url>" create-key
+# Leave blank against a solo-mode server.
+SMOOTH_API_KEY=""
+
+# A name for THIS machine. Created on the server on first contact (required).
+MACHINE_NAME="mill01"
+
+# Point at your LinuxCNC INI; the tool table is discovered from it.
+LINUXCNC_INI="%(ini)s"
+# ...or point straight at the table instead and delete LINUXCNC_INI above:
+# TOOL_TABLE="/home/user/linuxcnc/configs/mill/tool.tbl"
+
+# Optional.
+# UNITS="mm"                   # offset units, default mm
+# LOG_DIR="/tmp/smooth-sync"   # also write timestamped log files here
+"""
+
+INI_PLACEHOLDER = "/home/user/linuxcnc/configs/mill/mill.ini"
+
+
+def _discover_ini():
+    """Best-effort guess at the operator's LinuxCNC INI, to prefill `init`.
+
+    Scans the standard ~/linuxcnc/configs/<config>/<name>.ini layout. Returns
+    the first match (sorted for determinism) or None.
+    """
+    pattern = os.path.join(os.path.expanduser("~"), "linuxcnc", "configs", "*", "*.ini")
+    matches = sorted(glob.glob(pattern))
+    return matches[0] if matches else None
+
+
+def cmd_init(path, force=False):
+    """Write a starter config file (mode 0600 — it holds an API key).
+
+    Refuses to clobber an existing file unless --force, so a stray `init` can
+    never wipe a working setup. Returns a process exit code (0 ok, 2 refused).
+    """
+    if os.path.exists(path) and not force:
+        log("Config already exists: %s (use --force to overwrite)" % path)
+        return 2
+
+    discovered = _discover_ini()
+    content = CONFIG_TEMPLATE % {"ini": discovered or INI_PLACEHOLDER}
+
+    config_dir = os.path.dirname(path)
+    if config_dir:
+        os.makedirs(config_dir, exist_ok=True)
+    # O_CREAT with 0600 so the key is never briefly world-readable; re-chmod
+    # covers the --force case where the file already existed with looser perms.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+    os.chmod(path, 0o600)
+
+    log("Wrote starter config: %s" % path)
+    if discovered:
+        log("Prefilled LINUXCNC_INI from a discovered config: %s" % discovered)
+    log("Edit it (server URL, API key, machine name), then run: smooth-linuxcnc doctor")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# doctor — one-shot diagnosis of the common setup failures
+# ---------------------------------------------------------------------------
+
+def _check(ok, label, detail=""):
+    """Print one checklist line; return the boolean so callers can fold it."""
+    line = "[%s] %s" % (" OK " if ok else "FAIL", label)
+    if detail:
+        line += " - " + detail
+    print(line)
+    return ok
+
+
+def cmd_doctor(config, config_path):
+    """Validate config + reach the server, printing a green/red checklist.
+
+    Collapses the four failures that otherwise only surface as a cryptic cron
+    log — bad URL, bad key, INI not found, table unreadable — into one report.
+    Returns 0 when everything passes, 2 otherwise (it's a diagnostic, not the
+    cron path, so a non-zero exit on problems is correct here).
+    """
+    print("Smooth LinuxCNC client %s - checking setup\n" % CLIENT_VERSION)
+    ok = True
+
+    have_config = os.path.exists(config_path)
+    ok = _check(have_config, "Config file",
+                config_path if have_config
+                else "%s not found (run: smooth-linuxcnc init)" % config_path) and ok
+
+    base_url = (config.get("SMOOTH_API_URL") or "").rstrip("/")
+    ok = _check(bool(base_url), "Server URL",
+                base_url or "SMOOTH_API_URL not set") and ok
+
+    machine_name = config.get("MACHINE_NAME")
+    ok = _check(bool(machine_name), "Machine name",
+                machine_name or "MACHINE_NAME not set") and ok
+
+    # Tool table: resolve (direct or via INI), then confirm it parses.
+    table_path = config.get("TOOL_TABLE")
+    detail = ""
+    if not table_path and config.get("LINUXCNC_INI"):
+        try:
+            table_path = find_tool_table(config["LINUXCNC_INI"])
+        except (OSError, ToolTableError) as e:
+            detail = "INI error: %s" % e
+    table_ok = bool(table_path) and os.path.exists(table_path)
+    if table_ok:
+        try:
+            with open(table_path) as f:
+                count = len(parse_tool_table(f.read()))
+            detail = "%s (%d tools)" % (table_path, count)
+        except (OSError, ToolTableError) as e:
+            table_ok = False
+            detail = "%s - unreadable: %s" % (table_path, e)
+    elif not detail:
+        detail = ("%s not found" % table_path) if table_path \
+            else "set TOOL_TABLE or LINUXCNC_INI"
+    ok = _check(table_ok, "Tool table", detail) and ok
+
+    # Server checks only make sense once we have a URL.
+    if base_url:
+        reachable = False
+        version = None
+        try:
+            health = http_json("GET", "%s/api/health" % base_url, "")
+            version = health.get("version", "?")
+            reachable = True
+        except ServerError:
+            # An HTTP status (even 403/404 — e.g. an older build with no
+            # /api/health) still proves the server answered. It's reachable.
+            reachable = True
+        except ServerUnreachable as e:
+            ok = _check(False, "Server reachable", str(e)) and ok
+
+        if reachable:
+            _check(True, "Server reachable",
+                   base_url + (" (server v%s)" % version if version else ""))
+            api_key = config.get("SMOOTH_API_KEY", "")
+            try:
+                http_json("GET", "%s/api/v1/machine-records" % base_url, api_key)
+                _check(True, "Authentication",
+                       "API key accepted" if api_key else "solo mode (no key)")
+            except ServerError as e:
+                hint = ("key rejected - check SMOOTH_API_KEY"
+                        if e.code in (401, 403) else "HTTP %s" % e.code)
+                ok = _check(False, "Authentication", hint) and ok
+            except ServerUnreachable as e:
+                ok = _check(False, "Authentication", str(e)) and ok
+
+    print()
+    if ok:
+        print("All checks passed. Run: smooth-linuxcnc sync")
+        return 0
+    print("Some checks failed. Edit %s and re-run: smooth-linuxcnc doctor" % config_path)
+    return 2
 
 
 # ---------------------------------------------------------------------------
@@ -941,17 +1118,68 @@ def sync_tool_table(config):
     return 0
 
 
+def build_parser():
+    """Construct the argparse CLI. argparse is stdlib (2.7+), so the single-file,
+    no-pip, Python 3.6+ constraint is preserved."""
+    parser = argparse.ArgumentParser(
+        prog="smooth-linuxcnc",
+        description="Sync a LinuxCNC tool table with a Smooth server.",
+        epilog="First time? Run 'smooth-linuxcnc init' to create %s, edit it, "
+               "then 'smooth-linuxcnc doctor' to check it." % DEFAULT_CONFIG_PATH,
+    )
+    parser.add_argument("--version", action="version",
+                        version="smooth-linuxcnc %s" % CLIENT_VERSION)
+    parser.add_argument("--config", metavar="PATH", default=DEFAULT_CONFIG_PATH,
+                        help="config file path (default: %(default)s)")
+    parser.add_argument("--url", metavar="URL",
+                        help="server URL (overrides config and $SMOOTH_API_URL)")
+
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+    for name, helptext in (
+        ("sync", "full cycle: push local table to server, pull bound changes back"),
+        ("push", "one-way: push local table to server only"),
+    ):
+        sp = sub.add_parser(name, help=helptext)
+        sp.add_argument("machine", nargs="?",
+                        help="machine name (overrides MACHINE_NAME)")
+    init_p = sub.add_parser("init", help="write a starter config file, then exit")
+    init_p.add_argument("--force", action="store_true",
+                        help="overwrite an existing config file")
+    sub.add_parser("doctor", help="check configuration and server connectivity")
+    return parser
+
+
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("push", "sync"):
-        print(__doc__)
+    parser = build_parser()
+    args = parser.parse_args(argv[1:])
+
+    if not args.command:
+        parser.print_help()
         return 2
-    config = load_config()
-    if len(argv) > 2:
-        config["MACHINE_NAME"] = argv[2]
-    if argv[1] == "sync":
+
+    config_path = args.config
+    if args.command == "init":
+        return cmd_init(config_path, force=args.force)
+
+    config = load_config(config_path)
+    if args.url:
+        config["SMOOTH_API_URL"] = args.url
+    if getattr(args, "machine", None):
+        config["MACHINE_NAME"] = args.machine
+
+    if args.command == "doctor":
+        return cmd_doctor(config, config_path)
+    if args.command == "sync":
         return sync_tool_table(config)
-    return push_tool_table(config)
+    if args.command == "push":
+        return push_tool_table(config)
+    return 2  # unreachable: argparse rejects unknown commands
+
+
+def cli():
+    """Console-script entry point (pyproject [project.scripts])."""
+    sys.exit(main(sys.argv))
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    cli()

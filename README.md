@@ -28,29 +28,52 @@ server in step, both directions:
 
 LinuxCNC control boxes are often image-built on old distributions. This client:
 
-- is a **single file** — copy it anywhere, no install step
-- uses **only the Python 3 standard library** — no pip, ever (CI tests back to Python 3.6)
+- is a **single file** — copy it anywhere, no install step required
+- has **no third-party dependencies** — Python 3 standard library only, so there
+  are never any pip-resolved packages to install, on any Python 3.6+ (CI tests
+  back to Python 3.6)
 - **never blocks the machine** — an unreachable server logs one line and exits 0,
   so a cron job can fire forever without consequences
 - **never runs a server on the control box** — the Smooth server belongs on a
   NAS/LAN box; this script is just a small messenger
 
+Because there are no dependencies, the same file is **pip-installable on a modern
+box** (giving you a `smooth-linuxcnc` command on your PATH) *and* **copy-and-run
+on an old one** — you never have to choose.
+
 ## Quick start
 
-### 1. Get the file onto the control box
+### 1. Get it onto the control box
+
+Either install it (modern box, gives you a `smooth-linuxcnc` command):
+
+```bash
+pip install smooth-linuxcnc
+```
+
+…or just grab the single file (old box, no pip):
 
 ```bash
 wget https://raw.githubusercontent.com/loobric/smooth-linuxcnc/master/smooth_linuxcnc.py
 chmod +x smooth_linuxcnc.py
 ```
 
-### 2. Configure
+Every command below works either way — as `smooth-linuxcnc <cmd>` (installed) or
+`./smooth_linuxcnc.py <cmd>` (single file).
 
-Create `~/.config/smooth/linuxcnc.conf`:
+### 2. Write a config, then edit it
+
+```bash
+smooth-linuxcnc init
+```
+
+This writes a commented `~/.config/smooth/linuxcnc.conf` (mode 600 — it will hold
+your API key) and, if it can find one, prefills your LinuxCNC INI path. Open it
+and fill in the server URL, API key, and machine name:
 
 ```bash
 SMOOTH_API_URL="http://nas.local:8000"
-SMOOTH_API_KEY="your-api-key"        # omit against a solo-mode server
+SMOOTH_API_KEY="your-api-key"        # leave blank against a solo-mode server
 MACHINE_NAME="mill01"
 LINUXCNC_INI="/home/user/linuxcnc/configs/mill/mill.ini"   # tool table found via INI
 # or point at the table directly:
@@ -59,19 +82,38 @@ LINUXCNC_INI="/home/user/linuxcnc/configs/mill/mill.ini"   # tool table found vi
 # LOG_DIR="/tmp/smooth-sync"         # optional log files
 ```
 
-Environment variables with the same names override the file.
+Environment variables with the same names override the file, as do `--url` and a
+positional machine name on the command line.
 
-> **Trying the sandbox?** Point at the free hosted server with
-> `SMOOTH_API_URL="https://api.loobric.com"` and an API key you create with the
-> Python client (`pip install loobric-smooth`; see
+> **Trying the sandbox?** Set `SMOOTH_API_URL="https://api.loobric.com"` and an
+> API key you create with the Python client (`pip install loobric-smooth`; see
 > [loobric-smooth/docs/SANDBOX.md](https://github.com/loobric/loobric-smooth/blob/master/docs/SANDBOX.md)).
 > The sandbox is a shared playground — keep nothing real there.
 
-### 3. Sync
+### 3. Check your setup
 
 ```bash
-./smooth_linuxcnc.py sync            # full cycle: push + pull (use this)
-./smooth_linuxcnc.py push            # one-way, table -> server only
+smooth-linuxcnc doctor
+```
+
+One command validates the config, finds and parses your tool table, and confirms
+the server is reachable and your key works — so setup problems surface here
+instead of in a cron log:
+
+```
+[ OK ] Config file - /home/user/.config/smooth/linuxcnc.conf
+[ OK ] Server URL - http://nas.local:8000
+[ OK ] Machine name - mill01
+[ OK ] Tool table - /home/user/linuxcnc/configs/mill/tool.tbl (5 tools)
+[ OK ] Server reachable - http://nas.local:8000 (server v0.2.0)
+[ OK ] Authentication - API key accepted
+```
+
+### 4. Sync
+
+```bash
+smooth-linuxcnc sync            # full cycle: push + pull (use this)
+smooth-linuxcnc push            # one-way, table -> server only
 ```
 
 ```
@@ -90,12 +132,14 @@ open load request is folded into the in-sync summary, not hidden behind
 [2026-06-09 12:05:00] 5 tools in sync, 1 tool requested: "1/4 downcut" (inst-7f3a91) - mount it and assign pocket 5
 ```
 
-### 4. Automate (cron)
+### 5. Automate (cron)
 
 ```bash
 crontab -e
 # every 5 minutes; safe even when the server is down
-*/5 * * * * /home/user/smooth_linuxcnc.py sync >> /tmp/smooth-sync.log 2>&1
+*/5 * * * * smooth-linuxcnc sync >> /tmp/smooth-sync.log 2>&1
+# or, single-file install:
+# */5 * * * * /home/user/smooth_linuxcnc.py sync >> /tmp/smooth-sync.log 2>&1
 ```
 
 ## Tool table format

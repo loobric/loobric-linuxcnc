@@ -4,6 +4,29 @@ All notable changes to **smooth-linuxcnc** (the LinuxCNC controller-side client
 for Smooth) are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-06-28
+
+Less startup friction, same single-file promise.
+
+### Added
+- **`init`** writes a commented starter config to `~/.config/smooth/linuxcnc.conf`
+  (mode 600 — it holds an API key) so you edit a file instead of authoring one
+  from scratch. It refuses to clobber an existing config without `--force`, and
+  prefills `LINUXCNC_INI` from a discovered `~/linuxcnc/configs/*/*.ini`.
+- **`doctor`** validates config, resolves and parses the tool table, and confirms
+  the server is reachable and the API key works — a green/red checklist so setup
+  problems surface there instead of in a cron log. Any HTTP response counts as
+  reachable; only a network failure does not.
+- **pip-installable**: `pip install smooth-linuxcnc` puts a `smooth-linuxcnc`
+  command on your PATH. Still zero third-party dependencies, so the single file
+  stays copy-and-run on old control boxes — you never have to choose.
+
+### Changed
+- Real argparse CLI: `-h`/`--help` on every command, `--version`, and global
+  `--config` / `--url` overrides. The `push`/`sync` exit-code contract (0 on
+  success *or* unreachable server, 2 on usage/config error) is unchanged, and a
+  positional machine name plus the `SMOOTH_*` env overrides still work.
+
 ## [0.4.0] — 2026-06-23
 
 ### Added
@@ -36,4 +59,6 @@ The v2 client, aligned to the sectioned tool schema.
 ### Removed
 - The undocumented "slot" term, project-wide → **entry** / `ToolTableEntry`.
 
+[0.5.0]: https://github.com/loobric/smooth-linuxcnc/releases/tag/v0.5.0
+[0.4.0]: https://github.com/loobric/smooth-linuxcnc/releases/tag/v0.4.0
 [0.3.0]: https://github.com/loobric/smooth-linuxcnc/releases/tag/v0.3.0
