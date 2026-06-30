@@ -172,4 +172,5 @@ The `examples/` directory contains a LinuxCNC sim configuration for testing.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Contributions welcome under DCO sign-off.
+MIT — see [LICENSE](LICENSE). Contributions welcome under DCO sign-off — see
+[CONTRIBUTING.md](CONTRIBUTING.md) (no CLA).
