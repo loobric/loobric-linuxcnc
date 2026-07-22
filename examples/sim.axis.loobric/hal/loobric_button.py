@@ -1,13 +1,13 @@
 """
-Smooth Button Handler for LinuxCNC Axis
+Loobric Button Handler for LinuxCNC Axis
 
 This script handles the custom button press and LED feedback in the Axis interface.
 """
 import os
 import hal
-from smooth_linuxcnc.config import read_smooth_config
+from loobric_linuxcnc.config import read_loobric_config
 
-class SmoothButton:
+class LoobricButton:
     def __init__(self, halcomp, builder):
         self.hal = halcomp
         self.ini_path = os.environ.get("AXIS_PROGRESS_BAR", "")
@@ -26,18 +26,18 @@ class SmoothButton:
         # Set up a timer to check button state (100ms)
         self.hal.timeout_add(100, self.update)
         
-        print("Smooth: Button handler initialized")
+        print("Loobric: Button handler initialized")
     
     def sync_tools(self):
         """Handle the tool synchronization."""
         try:
-            config = read_smooth_config(self.ini_path)
-            print(f"Smooth: Starting tool sync with {config['URL']}")
+            config = read_loobric_config(self.ini_path)
+            print(f"Loobric: Starting tool sync with {config['URL']}")
             # Call your sync script here with config
             # subprocess.Popen(["path/to/sync_script.sh", config['URL'], config['TOKEN']])
             return True
         except Exception as e:
-            print(f"Smooth: Error syncing tools: {e}")
+            print(f"Loobric: Error syncing tools: {e}")
             return False
     
     def update(self):
@@ -55,9 +55,9 @@ class SmoothButton:
             self.last_button_state = current_state
             return True
         except Exception as e:
-            print(f"Smooth: Error in update: {e}")
+            print(f"Loobric: Error in update: {e}")
             return False
 
 def get_handlers(halcomp, builder):
     """Return the list of handlers for Axis to use."""
-    return [SmoothButton(halcomp, builder)]
+    return [LoobricButton(halcomp, builder)]

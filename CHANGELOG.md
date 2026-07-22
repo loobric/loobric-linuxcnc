@@ -1,7 +1,7 @@
 # Changelog
 
-All notable changes to **smooth-linuxcnc** (the LinuxCNC controller-side client
-for Smooth) are recorded here. This project adheres to
+All notable changes to **loobric-linuxcnc** (the LinuxCNC controller-side client
+for Loobric) are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
 ## [0.6.1] — 2026-06-28
@@ -10,7 +10,7 @@ for Smooth) are recorded here. This project adheres to
 - **Cloudflare 403 (error 1010) on every request**: the client used
   `urllib.request`, which sends `User-Agent: Python-urllib/X.Y` — a signature
   Cloudflare's WAF blocks in front of `api.loobric.com`. Requests now send an
-  explicit `User-Agent: smooth-linuxcnc/<version>` (and an `Accept:
+  explicit `User-Agent: loobric-linuxcnc/<version>` (and an `Accept:
   application/json` header), so the sync reaches the server. (The core and
   FreeCAD clients use `http.client`, send no such signature, and were
   unaffected.)
@@ -28,11 +28,11 @@ Make the sync visible to the operator at the machine.
   timestamp. The classification was already computed on every sync and only
   logged; it is now persisted so a GUI can surface it without re-querying the
   server.
-- **GladeVCP status panel** (`examples/sim.axis.smooth/`): a tool-table sync is
+- **GladeVCP status panel** (`examples/sim.axis.loobric/`): a tool-table sync is
   invisible when the client runs from cron, so this panel surfaces it inside a
   running LinuxCNC GUI. A colored indicator (green/yellow/red, plus grey when the
   last sync is stale) and a message/tooltip show what — if anything — the
-  operator must mount; a **Sync** button runs `smooth-linuxcnc sync` (the same
+  operator must mount; a **Sync** button runs `loobric-linuxcnc sync` (the same
   command cron runs). The panel only reads the state file and requests a sync; it
   never edits the tool table or intercepts M6.
 
@@ -51,7 +51,7 @@ Less startup friction, same single-file promise.
   a machine name (defaulting to the hostname), and — when several
   `~/linuxcnc/configs/*/*.ini` exist — which machine this is (writing the rest as
   commented alternatives). It then offers to run `doctor`. The result is written
-  to `~/.config/smooth/linuxcnc.conf` (mode 600 — it holds an API key), never
+  to `~/.config/loobric/linuxcnc.conf` (mode 600 — it holds an API key), never
   clobbering an existing config without `--force`. Non-interactive runs take every
   default without blocking; `--ini PATH` names a config directly for scripted
   installs.
@@ -59,7 +59,7 @@ Less startup friction, same single-file promise.
   the server is reachable and the API key works — a green/red checklist so setup
   problems surface there instead of in a cron log. Any HTTP response counts as
   reachable; only a network failure does not.
-- **pip-installable**: `pip install smooth-linuxcnc` puts a `smooth-linuxcnc`
+- **pip-installable**: `pip install loobric-linuxcnc` puts a `loobric-linuxcnc`
   command on your PATH. Still zero third-party dependencies, so the single file
   stays copy-and-run on old control boxes — you never have to choose.
 
@@ -67,7 +67,7 @@ Less startup friction, same single-file promise.
 - Real argparse CLI: `-h`/`--help` on every command, `--version`, and global
   `--config` / `--url` overrides. The `push`/`sync` exit-code contract (0 on
   success *or* unreachable server, 2 on usage/config error) is unchanged, and a
-  positional machine name plus the `SMOOTH_*` env overrides still work.
+  positional machine name plus the `LOOBRIC_*` env overrides still work.
 
 ## [0.4.0] — 2026-06-23
 
@@ -101,6 +101,6 @@ The v2 client, aligned to the sectioned tool schema.
 ### Removed
 - The undocumented "slot" term, project-wide → **entry** / `ToolTableEntry`.
 
-[0.5.0]: https://github.com/loobric/smooth-linuxcnc/releases/tag/v0.5.0
-[0.4.0]: https://github.com/loobric/smooth-linuxcnc/releases/tag/v0.4.0
-[0.3.0]: https://github.com/loobric/smooth-linuxcnc/releases/tag/v0.3.0
+[0.5.0]: https://github.com/loobric/loobric-linuxcnc/releases/tag/v0.5.0
+[0.4.0]: https://github.com/loobric/loobric-linuxcnc/releases/tag/v0.4.0
+[0.3.0]: https://github.com/loobric/loobric-linuxcnc/releases/tag/v0.3.0

@@ -1,10 +1,10 @@
-# Smooth LinuxCNC Client
+# Loobric LinuxCNC Client
 
-> Push your LinuxCNC tool table to a [Smooth](https://github.com/loobric/smooth-core) server. One file, standard library only, cron-safe.
+> Push your LinuxCNC tool table to a [Loobric](https://github.com/loobric/loobric-server) server. One file, standard library only, cron-safe.
 
 ## What it does
 
-`smooth_linuxcnc.py sync` keeps your machine's tool table (`.tbl`) and a Smooth
+`loobric_linuxcnc.py sync` keeps your machine's tool table (`.tbl`) and a Loobric
 server in step, both directions:
 
 - **Machine → server:** tool numbers, pockets, offsets, comments — raw table
@@ -34,37 +34,37 @@ LinuxCNC control boxes are often image-built on old distributions. This client:
   back to Python 3.6)
 - **never blocks the machine** — an unreachable server logs one line and exits 0,
   so a cron job can fire forever without consequences
-- **never runs a server on the control box** — the Smooth server belongs on a
+- **never runs a server on the control box** — the Loobric server belongs on a
   NAS/LAN box; this script is just a small messenger
 
 Because there are no dependencies, the same file is **pip-installable on a modern
-box** (giving you a `smooth-linuxcnc` command on your PATH) *and* **copy-and-run
+box** (giving you a `loobric-linuxcnc` command on your PATH) *and* **copy-and-run
 on an old one** — you never have to choose.
 
 ## Quick start
 
 ### 1. Get it onto the control box
 
-Either install it (modern box, gives you a `smooth-linuxcnc` command):
+Either install it (modern box, gives you a `loobric-linuxcnc` command):
 
 ```bash
-pip install smooth-linuxcnc
+pip install loobric-linuxcnc
 ```
 
 …or just grab the single file (old box, no pip):
 
 ```bash
-wget https://raw.githubusercontent.com/loobric/smooth-linuxcnc/master/smooth_linuxcnc.py
-chmod +x smooth_linuxcnc.py
+wget https://raw.githubusercontent.com/loobric/loobric-linuxcnc/master/loobric_linuxcnc.py
+chmod +x loobric_linuxcnc.py
 ```
 
-Every command below works either way — as `smooth-linuxcnc <cmd>` (installed) or
-`./smooth_linuxcnc.py <cmd>` (single file).
+Every command below works either way — as `loobric-linuxcnc <cmd>` (installed) or
+`./loobric_linuxcnc.py <cmd>` (single file).
 
 ### 2. Run the setup wizard
 
 ```bash
-smooth-linuxcnc init
+loobric-linuxcnc init
 ```
 
 `init` walks you through it, prompting for:
@@ -73,27 +73,27 @@ smooth-linuxcnc init
   (a shared playground — keep nothing real there; point at your own NAS/LAN
   server for production).
 - **API key** — leave it blank if you don't have one yet. Create an account and
-  key through the web UI or the Python client (`pip install loobric-smooth`;
-  `smooth register` then `smooth create-key` — see
-  [loobric-smooth/docs/SANDBOX.md](https://github.com/loobric/loobric-smooth/blob/master/docs/SANDBOX.md)),
+  key through the web UI or the Python client (`pip install loobric-loobric`;
+  `loobric register` then `loobric create-key` — see
+  [loobric-loobric/docs/SANDBOX.md](https://github.com/loobric/loobric-loobric/blob/master/docs/SANDBOX.md)),
   then paste it into the config later. Blank is also correct for a solo-mode server.
 - **Machine name** — defaults to this box's hostname.
 - **LinuxCNC config** — auto-discovered from `~/linuxcnc/configs/`. If you have
   **several**, it asks which machine this is and writes the rest as commented
   alternatives, so you can switch later by un/commenting a line.
 
-It writes `~/.config/smooth/linuxcnc.conf` (mode 600 — it holds your API key) and
+It writes `~/.config/loobric/linuxcnc.conf` (mode 600 — it holds your API key) and
 offers to run `doctor` right away. You can re-open the file any time to change a
 value; environment variables of the same name override it, as do `--url` and a
 positional machine name on the command line.
 
 Non-interactive (no terminal)? `init` takes every default without prompting. For
-a scripted install, name the INI explicitly: `smooth-linuxcnc init --ini PATH`.
+a scripted install, name the INI explicitly: `loobric-linuxcnc init --ini PATH`.
 
 ### 3. Check your setup
 
 ```bash
-smooth-linuxcnc doctor
+loobric-linuxcnc doctor
 ```
 
 One command validates the config, finds and parses your tool table, and confirms
@@ -101,7 +101,7 @@ the server is reachable and your key works — so setup problems surface here
 instead of in a cron log:
 
 ```
-[ OK ] Config file - /home/user/.config/smooth/linuxcnc.conf
+[ OK ] Config file - /home/user/.config/loobric/linuxcnc.conf
 [ OK ] Server URL - http://nas.local:8000
 [ OK ] Machine name - mill01
 [ OK ] Tool table - /home/user/linuxcnc/configs/mill/tool.tbl (5 tools)
@@ -112,8 +112,8 @@ instead of in a cron log:
 ### 4. Sync
 
 ```bash
-smooth-linuxcnc sync            # full cycle: push + pull (use this)
-smooth-linuxcnc push            # one-way, table -> server only
+loobric-linuxcnc sync            # full cycle: push + pull (use this)
+loobric-linuxcnc push            # one-way, table -> server only
 ```
 
 ```
@@ -137,9 +137,9 @@ open load request is folded into the in-sync summary, not hidden behind
 ```bash
 crontab -e
 # every 5 minutes; safe even when the server is down
-*/5 * * * * smooth-linuxcnc sync >> /tmp/smooth-sync.log 2>&1
+*/5 * * * * loobric-linuxcnc sync >> /tmp/loobric-sync.log 2>&1
 # or, single-file install:
-# */5 * * * * /home/user/smooth_linuxcnc.py sync >> /tmp/smooth-sync.log 2>&1
+# */5 * * * * /home/user/loobric_linuxcnc.py sync >> /tmp/loobric-sync.log 2>&1
 ```
 
 ## Tool table format

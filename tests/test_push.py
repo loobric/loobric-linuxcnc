@@ -5,7 +5,7 @@
 """Push-flow tests with a stubbed HTTP transport (stdlib unittest + mock).
 
 Assumptions (v2 sectioned schema):
-- All server traffic goes through smooth_linuxcnc.http_json(), so tests
+- All server traffic goes through loobric_linuxcnc.http_json(), so tests
   stub exactly one seam
 - push_tool_table() creates+names a MachineRecord on first run (POST
   /machine-records then POST .../assert), PERSISTS the returned internal.id
@@ -23,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import smooth_linuxcnc as sl
+import loobric_linuxcnc as sl
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample.tbl")
 
@@ -59,8 +59,8 @@ class TestPushFlow(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.cfg = {
-            "SMOOTH_API_URL": "http://nas.local:8000",
-            "SMOOTH_API_KEY": "k",
+            "LOOBRIC_API_URL": "http://nas.local:8000",
+            "LOOBRIC_API_KEY": "k",
             "MACHINE_NAME": "mill01",
             "TOOL_TABLE": FIXTURE,
             "STATE_DIR": self.dir,
@@ -197,7 +197,7 @@ class TestPushFlow(unittest.TestCase):
         self.assertEqual(code, 0)
 
     def test_missing_config_is_usage_error(self):
-        code = sl.push_tool_table({"SMOOTH_API_URL": "http://x"})  # no machine/table
+        code = sl.push_tool_table({"LOOBRIC_API_URL": "http://x"})  # no machine/table
         self.assertEqual(code, 2)
 
 

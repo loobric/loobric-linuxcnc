@@ -1,5 +1,5 @@
-# Smooth Button HAL Configuration
-# This file defines the HAL components for the Smooth sync button and LED
+# Loobric Button HAL Configuration
+# This file defines the HAL components for the Loobric sync button and LED
 
 # Load required components
 loadrt toggle count=1

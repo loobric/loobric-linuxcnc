@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 """
-Smooth LinuxCNC client - push your tool table to a Smooth server.
+Loobric LinuxCNC client - push your tool table to a Loobric server.
 
 SINGLE FILE, STANDARD LIBRARY ONLY. LinuxCNC control boxes are often
 image-built on old distributions; this script must run on any Python 3.6+
@@ -14,25 +14,25 @@ with no pip installs and must NEVER block or break the machine:
 - Bad usage or missing configuration -> log it, exit 2
 
 Usage:
-    smooth-linuxcnc init [--force]            # write a starter config, then edit it
-    smooth-linuxcnc doctor                    # check config + server connectivity
-    smooth-linuxcnc sync [machine-name]       # full cycle: push + pull (cron this)
-    smooth-linuxcnc push [machine-name]       # one-way: table -> server only
+    loobric-linuxcnc init [--force]            # write a starter config, then edit it
+    loobric-linuxcnc doctor                    # check config + server connectivity
+    loobric-linuxcnc sync [machine-name]       # full cycle: push + pull (cron this)
+    loobric-linuxcnc push [machine-name]       # one-way: table -> server only
 
-Run via the installed `smooth-linuxcnc` command (pip install) or the single file
-directly (`./smooth_linuxcnc.py ...`) — both behave identically.
+Run via the installed `loobric-linuxcnc` command (pip install) or the single file
+directly (`./loobric_linuxcnc.py ...`) — both behave identically.
 
-Configuration: ~/.config/smooth/linuxcnc.conf (shell-style KEY="value",
+Configuration: ~/.config/loobric/linuxcnc.conf (shell-style KEY="value",
 compatible with the v1 format). Create it with `init`, then edit. Overridable
 via environment variables, and --url / a positional machine name on the CLI:
 
-    SMOOTH_API_URL="http://nas.local:8000"
-    SMOOTH_API_KEY="your-api-key"      # not needed against a solo-mode server
+    LOOBRIC_API_URL="http://nas.local:8000"
+    LOOBRIC_API_KEY="your-api-key"      # not needed against a solo-mode server
     MACHINE_NAME="mill01"              # or pass as CLI argument
     TOOL_TABLE="/path/to/tool.tbl"     # or LINUXCNC_INI to discover it
     LINUXCNC_INI="/path/to/mill.ini"
     UNITS="mm"                         # offsets unit, default mm
-    LOG_DIR="/tmp/smooth-sync"         # optional log file location
+    LOG_DIR="/tmp/loobric-sync"         # optional log file location
 
 Tool table reference: http://wiki.linuxcnc.org/cgi-bin/wiki.pl?ToolTable
 Entries are pushed UNBOUND; binding tool-table rows to ToolInstanceRecords is
@@ -59,7 +59,7 @@ import time
 import urllib.error
 import urllib.request
 
-DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/smooth/linuxcnc.conf")
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/loobric/linuxcnc.conf")
 HTTP_TIMEOUT = 10  # seconds
 CLIENT_NAME = "linuxcnc"
 CLIENT_VERSION = "0.6.1"
@@ -70,7 +70,7 @@ class ToolTableError(Exception):
 
 
 class ServerUnreachable(Exception):
-    """The Smooth server could not be reached (benign for cron)."""
+    """The Loobric server could not be reached (benign for cron)."""
 
 
 class ServerError(Exception):
@@ -216,7 +216,7 @@ def generate_tool_table(tools):
 
 
 # ---------------------------------------------------------------------------
-# Mapping to the Smooth API (v2 sectioned schema, /sync entries)
+# Mapping to the Loobric API (v2 sectioned schema, /sync entries)
 # ---------------------------------------------------------------------------
 
 # canonical offset key  <-  local tool dict key
@@ -308,7 +308,7 @@ def _local_offsets(tool):
 
 
 # ---------------------------------------------------------------------------
-# Tool set members: requested / pending bind (smooth-linuxcnc#3)
+# Tool set members: requested / pending bind (loobric-linuxcnc#3)
 #
 # A machine may have a tool SET bound to it (docs/ROUNDTRIP.md). A set member
 # references a tool INSTANCE; when that instance is not yet loaded on this
@@ -492,7 +492,7 @@ def load_config(path=DEFAULT_CONFIG_PATH):
     if os.path.exists(path):
         with open(path) as f:
             config.update(parse_config(f.read()))
-    for key in ("SMOOTH_API_URL", "SMOOTH_API_KEY", "MACHINE_NAME",
+    for key in ("LOOBRIC_API_URL", "LOOBRIC_API_KEY", "MACHINE_NAME",
                 "TOOL_TABLE", "LINUXCNC_INI", "UNITS", "LOG_DIR"):
         if os.environ.get(key):
             config[key] = os.environ[key]
@@ -548,7 +548,7 @@ def http_json(method, url, api_key, body=None, timeout=HTTP_TIMEOUT):
     # urllib otherwise sends "User-Agent: Python-urllib/X.Y", a signature
     # Cloudflare's WAF blocks with a 403 (error 1010). Identify ourselves
     # instead - this is also how the request shows up in server logs.
-    request.add_header("User-Agent", "smooth-linuxcnc/%s" % CLIENT_VERSION)
+    request.add_header("User-Agent", "loobric-linuxcnc/%s" % CLIENT_VERSION)
     if api_key:
         request.add_header("Authorization", "Bearer %s" % api_key)
     try:
@@ -623,7 +623,7 @@ def _sync_push(base_url, machine_id, machine_name, api_key, entries, mode):
 def _resolve_inputs(config):
     """Resolve (base_url, machine_name, table_path); return (.., None) or
     (None, None, None, exit_code) on a usage/config error."""
-    base_url = (config.get("SMOOTH_API_URL") or "").rstrip("/")
+    base_url = (config.get("LOOBRIC_API_URL") or "").rstrip("/")
     machine_name = config.get("MACHINE_NAME")
     table_path = config.get("TOOL_TABLE")
     if not table_path and config.get("LINUXCNC_INI"):
@@ -633,7 +633,7 @@ def _resolve_inputs(config):
             log("ERROR: %s" % e)
             return None, None, None, 2
     if not base_url or not machine_name or not table_path:
-        log("ERROR: SMOOTH_API_URL, MACHINE_NAME, and TOOL_TABLE (or "
+        log("ERROR: LOOBRIC_API_URL, MACHINE_NAME, and TOOL_TABLE (or "
             "LINUXCNC_INI) must be configured")
         return None, None, None, 2
     return base_url, machine_name, table_path, None
@@ -664,7 +664,7 @@ def push_tool_table(config):
 
     units = config.get("UNITS", "mm")
     entries = [tool_to_entry(t, machine_name, units=units) for t in tools]
-    api_key = config.get("SMOOTH_API_KEY", "")
+    api_key = config.get("LOOBRIC_API_KEY", "")
     state_file = _state_path(config, machine_name)
     state = _load_state(state_file)
 
@@ -701,8 +701,8 @@ def push_tool_table(config):
 # ---------------------------------------------------------------------------
 
 CONFIG_TEMPLATE = """\
-# Smooth LinuxCNC client configuration.
-# Edit the values below, then check them with:  smooth-linuxcnc doctor
+# Loobric LinuxCNC client configuration.
+# Edit the values below, then check them with:  loobric-linuxcnc doctor
 #
 # Environment variables of the same name override these. So does --url and a
 # positional machine name on the command line.
@@ -711,11 +711,11 @@ CONFIG_TEMPLATE = """\
 
 # API key for a multi-user server. Leave blank if you don't have one yet -
 # create an account and key through the web UI, or with the Python client:
-#   pip install loobric-smooth
-#   smooth --url "<your server url>" register      # first time only
-#   smooth --url "<your server url>" create-key
+#   pip install loobric-loobric
+#   loobric --url "<your server url>" register      # first time only
+#   loobric --url "<your server url>" create-key
 # Leave blank against a solo-mode server.
-SMOOTH_API_KEY="%(key)s"
+LOOBRIC_API_KEY="%(key)s"
 
 # A name for THIS machine. Created on the server on first contact (required).
 MACHINE_NAME="%(machine)s"
@@ -724,7 +724,7 @@ MACHINE_NAME="%(machine)s"
 
 # Optional.
 # UNITS="mm"                   # offset units, default mm
-# LOG_DIR="/tmp/smooth-sync"   # also write timestamped log files here
+# LOG_DIR="/tmp/loobric-sync"   # also write timestamped log files here
 """
 
 INI_PLACEHOLDER = "/home/user/linuxcnc/configs/mill/mill.ini"
@@ -803,12 +803,12 @@ def _choose_ini(inis):
 
 
 def _url_block(url):
-    """Render the SMOOTH_API_URL section, flagging the sandbox in a comment."""
-    lines = ["# Where your Smooth server lives (required)."]
+    """Render the LOOBRIC_API_URL section, flagging the sandbox in a comment."""
+    lines = ["# Where your Loobric server lives (required)."]
     if url.rstrip("/") == SANDBOX_URL:
         lines.append("# NOTE: api.loobric.com is a shared SANDBOX - a playground for")
         lines.append("# trying things out. Do NOT use it for production tool data.")
-    lines.append('SMOOTH_API_URL="%s"' % url)
+    lines.append('LOOBRIC_API_URL="%s"' % url)
     return "\n".join(lines)
 
 
@@ -846,10 +846,10 @@ def cmd_init(path, force=False, ini=None):
         return 2
 
     if _interactive():
-        print("Smooth LinuxCNC client setup - press Enter to accept each [default].\n")
+        print("Loobric LinuxCNC client setup - press Enter to accept each [default].\n")
 
     # Server URL — default to the sandbox, but say plainly what it is.
-    url = _prompt("Smooth server URL?", default=SANDBOX_URL) or SANDBOX_URL
+    url = _prompt("Loobric server URL?", default=SANDBOX_URL) or SANDBOX_URL
     if url.rstrip("/") == SANDBOX_URL and _interactive():
         print("  ! %s is a shared SANDBOX - for trying things out, not "
               "production.\n" % SANDBOX_URL)
@@ -857,7 +857,7 @@ def cmd_init(path, force=False, ini=None):
     # API key — blank is fine; the file's comments say how to make one later.
     if _interactive():
         print("API key for a multi-user server. Leave blank if you don't have one")
-        print("yet (create it via the web UI or `smooth create-key`); blank is also")
+        print("yet (create it via the web UI or `loobric create-key`); blank is also")
         print("correct against a solo-mode server.")
     key = _prompt("API key?", default="") or ""
 
@@ -901,7 +901,7 @@ def cmd_init(path, force=False, ini=None):
             print()
             cmd_doctor(load_config(path), path)
             return 0
-    log("Next: edit anything you skipped, then run: smooth-linuxcnc doctor")
+    log("Next: edit anything you skipped, then run: loobric-linuxcnc doctor")
     return 0
 
 
@@ -926,17 +926,17 @@ def cmd_doctor(config, config_path):
     Returns 0 when everything passes, 2 otherwise (it's a diagnostic, not the
     cron path, so a non-zero exit on problems is correct here).
     """
-    print("Smooth LinuxCNC client %s - checking setup\n" % CLIENT_VERSION)
+    print("Loobric LinuxCNC client %s - checking setup\n" % CLIENT_VERSION)
     ok = True
 
     have_config = os.path.exists(config_path)
     ok = _check(have_config, "Config file",
                 config_path if have_config
-                else "%s not found (run: smooth-linuxcnc init)" % config_path) and ok
+                else "%s not found (run: loobric-linuxcnc init)" % config_path) and ok
 
-    base_url = (config.get("SMOOTH_API_URL") or "").rstrip("/")
+    base_url = (config.get("LOOBRIC_API_URL") or "").rstrip("/")
     ok = _check(bool(base_url), "Server URL",
-                base_url or "SMOOTH_API_URL not set") and ok
+                base_url or "LOOBRIC_API_URL not set") and ok
 
     machine_name = config.get("MACHINE_NAME")
     ok = _check(bool(machine_name), "Machine name",
@@ -982,13 +982,13 @@ def cmd_doctor(config, config_path):
         if reachable:
             _check(True, "Server reachable",
                    base_url + (" (server v%s)" % version if version else ""))
-            api_key = config.get("SMOOTH_API_KEY", "")
+            api_key = config.get("LOOBRIC_API_KEY", "")
             try:
                 http_json("GET", "%s/api/v1/machine-records" % base_url, api_key)
                 _check(True, "Authentication",
                        "API key accepted" if api_key else "solo mode (no key)")
             except ServerError as e:
-                hint = ("key rejected - check SMOOTH_API_KEY"
+                hint = ("key rejected - check LOOBRIC_API_KEY"
                         if e.code in (401, 403) else "HTTP %s" % e.code)
                 ok = _check(False, "Authentication", hint) and ok
             except ServerUnreachable as e:
@@ -996,14 +996,14 @@ def cmd_doctor(config, config_path):
 
     print()
     if ok:
-        print("All checks passed. Run: smooth-linuxcnc sync")
+        print("All checks passed. Run: loobric-linuxcnc sync")
         return 0
-    print("Some checks failed. Edit %s and re-run: smooth-linuxcnc doctor" % config_path)
+    print("Some checks failed. Edit %s and re-run: loobric-linuxcnc doctor" % config_path)
     return 2
 
 
 # ---------------------------------------------------------------------------
-# Full sync cycle (push + pull) - smooth-linuxcnc#2
+# Full sync cycle (push + pull) - loobric-linuxcnc#2
 # ---------------------------------------------------------------------------
 
 def _state_path(config, machine_name):
@@ -1116,7 +1116,7 @@ def sync_tool_table(config):
     state = _load_state(state_file)
     known = state.get("tools", {})
     units = config.get("UNITS", "mm")
-    api_key = config.get("SMOOTH_API_KEY", "")
+    api_key = config.get("LOOBRIC_API_KEY", "")
     backup_dir = config.get("LOG_DIR") or os.path.dirname(os.path.abspath(table_path))
 
     try:
@@ -1302,17 +1302,17 @@ def build_parser():
     """Construct the argparse CLI. argparse is stdlib (2.7+), so the single-file,
     no-pip, Python 3.6+ constraint is preserved."""
     parser = argparse.ArgumentParser(
-        prog="smooth-linuxcnc",
-        description="Sync a LinuxCNC tool table with a Smooth server.",
-        epilog="First time? Run 'smooth-linuxcnc init' to create %s, edit it, "
-               "then 'smooth-linuxcnc doctor' to check it." % DEFAULT_CONFIG_PATH,
+        prog="loobric-linuxcnc",
+        description="Sync a LinuxCNC tool table with a Loobric server.",
+        epilog="First time? Run 'loobric-linuxcnc init' to create %s, edit it, "
+               "then 'loobric-linuxcnc doctor' to check it." % DEFAULT_CONFIG_PATH,
     )
     parser.add_argument("--version", action="version",
-                        version="smooth-linuxcnc %s" % CLIENT_VERSION)
+                        version="loobric-linuxcnc %s" % CLIENT_VERSION)
     parser.add_argument("--config", metavar="PATH", default=DEFAULT_CONFIG_PATH,
                         help="config file path (default: %(default)s)")
     parser.add_argument("--url", metavar="URL",
-                        help="server URL (overrides config and $SMOOTH_API_URL)")
+                        help="server URL (overrides config and $LOOBRIC_API_URL)")
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     for name, helptext in (
@@ -1345,7 +1345,7 @@ def main(argv):
 
     config = load_config(config_path)
     if args.url:
-        config["SMOOTH_API_URL"] = args.url
+        config["LOOBRIC_API_URL"] = args.url
     if getattr(args, "machine", None):
         config["MACHINE_NAME"] = args.machine
 

@@ -2,9 +2,9 @@
 <interface>
   <requires lib="gtk+" version="3.0"/>
   <object class="GtkWindow" id="window1">
-    <property name="title" translatable="yes">Smooth</property>
+    <property name="title" translatable="yes">Loobric</property>
     <child>
-      <object class="GtkBox" id="smooth_panel">
+      <object class="GtkBox" id="loobric_panel">
         <property name="visible">True</property>
         <property name="orientation">vertical</property>
         <property name="spacing">8</property>

@@ -1,14 +1,14 @@
 # Development
 
-This repo is the LinuxCNC client for [Smooth](https://github.com/loobric/smooth-core).
-Everything lives in **one file**, `smooth_linuxcnc.py`, on purpose — see the
+This repo is the LinuxCNC client for [Loobric](https://github.com/loobric/loobric-server).
+Everything lives in **one file**, `loobric_linuxcnc.py`, on purpose — see the
 README's design constraints (old control-box distros, stdlib only, cron-safe).
 
 ## Architecture
 
-Smooth keeps a strict core/client split: `smooth-core` is the application-agnostic
+Loobric keeps a strict core/client split: `loobric-server` is the application-agnostic
 REST API and database; clients like this one speak the **public facade API only**
-(`ToolRecord`, `Machine`, `ToolTableEntry` — see smooth-core's
+(`ToolRecord`, `Machine`, `ToolTableEntry` — see loobric-server's
 `docs/UBIQUITOUS_LANGUAGE.md`). Deep-schema endpoints are private and off-limits.
 
 The client maps each `.tbl` row to a `ToolTableEntry` upsert:
@@ -39,11 +39,11 @@ is the server inbox's job, or the user's — never a client-side guess.
 ## Manual end-to-end
 
 ```bash
-# in smooth-core:
-SMOOTH_SOLO=1 uvicorn smooth.main:app --port 8000
+# in loobric-server:
+LOOBRIC_SOLO=1 uvicorn loobric.main:app --port 8000
 # here:
-SMOOTH_API_URL=http://localhost:8000 MACHINE_NAME=mill01 \
-  TOOL_TABLE=tests/fixtures/sample.tbl ./smooth_linuxcnc.py push
+LOOBRIC_API_URL=http://localhost:8000 MACHINE_NAME=mill01 \
+  TOOL_TABLE=tests/fixtures/sample.tbl ./loobric_linuxcnc.py push
 ```
 
 `examples/` holds a LinuxCNC sim configuration for testing against a real
@@ -53,4 +53,4 @@ LinuxCNC instance.
 
 DCO sign-off, tests first, keep the file ancient-Python-compatible. Pull-path
 work (server → `.tbl`, the closed loop) is tracked in
-[smooth-linuxcnc#2](https://github.com/loobric/smooth-linuxcnc/issues/2).
+[loobric-linuxcnc#2](https://github.com/loobric/loobric-linuxcnc/issues/2).

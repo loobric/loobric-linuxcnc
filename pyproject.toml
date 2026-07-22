@@ -3,14 +3,14 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smooth-linuxcnc"
+name = "loobric-linuxcnc"
 version = "0.6.1"
-description = "LinuxCNC integration for Smooth tool synchronization"
+description = "LinuxCNC integration for Loobric tool synchronization"
 readme = "README.md"
 requires-python = ">=3.6"
 license = { text = "MIT" }
 authors = [{ name = "sliptonic" }]
-keywords = ["cnc", "cam", "linuxcnc", "tool-table", "smooth", "machining"]
+keywords = ["cnc", "cam", "linuxcnc", "tool-table", "loobric", "machining"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
@@ -24,17 +24,17 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-smooth-linuxcnc = "smooth_linuxcnc:cli"
+loobric-linuxcnc = "loobric_linuxcnc:cli"
 
 [project.urls]
-Homepage = "https://github.com/loobric/smooth-linuxcnc"
-Repository = "https://github.com/loobric/smooth-linuxcnc"
-Issues = "https://github.com/loobric/smooth-linuxcnc/issues"
+Homepage = "https://github.com/loobric/loobric-linuxcnc"
+Repository = "https://github.com/loobric/loobric-linuxcnc"
+Issues = "https://github.com/loobric/loobric-linuxcnc/issues"
 
 [tool.setuptools]
 # One file, shipped as a top-level module — pip-installable AND still
 # copy-anywhere. No package directory keeps the single-file promise intact.
-py-modules = ["smooth_linuxcnc"]
+py-modules = ["loobric_linuxcnc"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

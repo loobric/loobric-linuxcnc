@@ -5,7 +5,7 @@
 """Tool table parse/generate round-trip tests (stdlib unittest only).
 
 Assumptions:
-- smooth_linuxcnc.py is a single stdlib-only file importable from repo root
+- loobric_linuxcnc.py is a single stdlib-only file importable from repo root
 - parse_tool_table/generate_tool_table round-trip losslessly
 - Parse errors carry line numbers; duplicate tool numbers are errors
 """
@@ -15,7 +15,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import smooth_linuxcnc as sl
+import loobric_linuxcnc as sl
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample.tbl")
 
@@ -108,14 +108,14 @@ class TestConfig(unittest.TestCase):
     def test_parse_shell_style_config(self):
         text = '\n'.join([
             '# comment',
-            'SMOOTH_API_URL="http://nas.local:8000"',
-            "SMOOTH_API_KEY='secret'",
+            'LOOBRIC_API_URL="http://nas.local:8000"',
+            "LOOBRIC_API_KEY='secret'",
             'MACHINE_NAME=mill01',
             '',
         ])
         cfg = sl.parse_config(text)
-        self.assertEqual(cfg["SMOOTH_API_URL"], "http://nas.local:8000")
-        self.assertEqual(cfg["SMOOTH_API_KEY"], "secret")
+        self.assertEqual(cfg["LOOBRIC_API_URL"], "http://nas.local:8000")
+        self.assertEqual(cfg["LOOBRIC_API_KEY"], "secret")
         self.assertEqual(cfg["MACHINE_NAME"], "mill01")
 
     def test_find_tool_table_from_ini(self):

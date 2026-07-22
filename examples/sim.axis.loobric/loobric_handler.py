@@ -1,6 +1,6 @@
-"""GladeVCP handler for the Smooth status panel.
+"""GladeVCP handler for the Loobric status panel.
 
-Surfaces the smooth-linuxcnc sync client's state to the operator inside a
+Surfaces the loobric-linuxcnc sync client's state to the operator inside a
 running LinuxCNC GUI. It is READ-ONLY with respect to tools: it never edits the
 tool table and never intercepts M6. It only reflects the `summary` the sync
 client persists to state-<machine>.json, and offers a button to run a sync.
@@ -10,7 +10,7 @@ client persists to state-<machine>.json, and offers a button to run a sync.
     red     - a tool mount is REQUESTED: the operator must mount it
     stale   - no sync yet, or the last sync is too old to trust
 
-The button runs `smooth-linuxcnc sync` - the same command the cron job runs -
+The button runs `loobric-linuxcnc sync` - the same command the cron job runs -
 so all server I/O stays in one place. This panel only displays and requests;
 it does not duplicate any sync logic.
 """
@@ -28,11 +28,11 @@ from gi.repository import Gtk, GLib
 # the client is pip-installed it is importable directly; running from a source
 # checkout, fall back to the repo root (three levels up from this example).
 try:
-    import smooth_linuxcnc as sl
+    import loobric_linuxcnc as sl
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))
-    import smooth_linuxcnc as sl
+    import loobric_linuxcnc as sl
 
 POLL_MS = 2000            # how often to re-read the state file
 STALE_SECONDS = 15 * 60   # a "good" sync older than this is shown as stale

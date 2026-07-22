@@ -2,7 +2,7 @@
 <pyvcp>
   <button>
     <halpin>button</halpin>
-    <text>"Smooth Sync"</text>
+    <text>"Loobric Sync"</text>
   </button>
   <led>
     <halpin>led</halpin>

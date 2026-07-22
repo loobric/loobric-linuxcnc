@@ -23,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import smooth_linuxcnc as sl
+import loobric_linuxcnc as sl
 
 
 class InitConfigTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class InitConfigTests(unittest.TestCase):
         with mock.patch.object(sl, "_discover_inis", return_value=[]):
             self.assertEqual(sl.cmd_init(self.path, force=True), 0)
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
-        self.assertIn("SMOOTH_API_URL", self._read())
+        self.assertIn("LOOBRIC_API_URL", self._read())
 
     # --- INI discovery -----------------------------------------------------
 
@@ -105,8 +105,8 @@ class InitConfigTests(unittest.TestCase):
                            side_effect=AssertionError("must not prompt")):
             self.assertEqual(sl.cmd_init(self.path), 0)
         cfg = sl.parse_config(self._read())
-        self.assertEqual(cfg["SMOOTH_API_URL"], sl.SANDBOX_URL)  # sandbox default
-        self.assertEqual(cfg["SMOOTH_API_KEY"], "")              # blank
+        self.assertEqual(cfg["LOOBRIC_API_URL"], sl.SANDBOX_URL)  # sandbox default
+        self.assertEqual(cfg["LOOBRIC_API_KEY"], "")              # blank
         self.assertEqual(cfg["MACHINE_NAME"], "box7")            # hostname default
         self.assertIn("SANDBOX", self._read())                  # warning comment present
 
@@ -127,8 +127,8 @@ class InitConfigTests(unittest.TestCase):
                 mock.patch("builtins.input", side_effect=answers):
             self.assertEqual(sl.cmd_init(self.path), 0)
         cfg = sl.parse_config(self._read())
-        self.assertEqual(cfg["SMOOTH_API_URL"], "http://nas.local:8000")
-        self.assertEqual(cfg["SMOOTH_API_KEY"], "secret-key")
+        self.assertEqual(cfg["LOOBRIC_API_URL"], "http://nas.local:8000")
+        self.assertEqual(cfg["LOOBRIC_API_KEY"], "secret-key")
         self.assertEqual(cfg["MACHINE_NAME"], "mill42")
         self.assertNotIn("SANDBOX", self._read())  # not the sandbox, no warning
 
@@ -142,8 +142,8 @@ class InitConfigTests(unittest.TestCase):
                 mock.patch("builtins.input", side_effect=answers):
             self.assertEqual(sl.cmd_init(self.path), 0)  # doctor's code doesn't sink init
         cfg = sl.parse_config(self._read())
-        self.assertEqual(cfg["SMOOTH_API_URL"], sl.SANDBOX_URL)
-        self.assertEqual(cfg["SMOOTH_API_KEY"], "")
+        self.assertEqual(cfg["LOOBRIC_API_URL"], sl.SANDBOX_URL)
+        self.assertEqual(cfg["LOOBRIC_API_KEY"], "")
         self.assertEqual(cfg["MACHINE_NAME"], "lathe9")
         doc.assert_called_once()  # blank == default "Y" -> doctor offered & run
 

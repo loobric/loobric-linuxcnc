@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 """
-Tests for the full sync cycle (smooth-linuxcnc#2) - the pull path that
+Tests for the full sync cycle (loobric-linuxcnc#2) - the pull path that
 closes the wear-offset loop, retargeted to the v2 sectioned schema.
 
 The contract under test (stdlib unittest, one stubbed HTTP seam):
@@ -30,7 +30,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import smooth_linuxcnc as sl
+import loobric_linuxcnc as sl
 
 TBL = """;millstone tool table - hands off the comments
 T3 P3 D+6.350000 Z-48.250000 ;1/4 downcut
@@ -226,7 +226,7 @@ class SyncCycleTest(unittest.TestCase):
             f.write(TBL)
         self.server = FakeServer()
         self.cfg = {
-            "SMOOTH_API_URL": "http://x", "MACHINE_NAME": "mill01",
+            "LOOBRIC_API_URL": "http://x", "MACHINE_NAME": "mill01",
             "TOOL_TABLE": self.tbl, "STATE_DIR": self.dir,
             "LOG_DIR": "",
         }
@@ -419,7 +419,7 @@ class BindingThenEditTest(SyncCycleTest):
 
 
 class RequestedMembersTest(SyncCycleTest):
-    """smooth-linuxcnc#3: the controller surfaces set members the operator
+    """loobric-linuxcnc#3: the controller surfaces set members the operator
     must still mount (requested) and members mounted-but-not-yet-confirmed
     (pending bind), folding them into the in-sync summary. It NEVER edits the
     .tbl for a requested tool (fulfilment is the operator's mount + the

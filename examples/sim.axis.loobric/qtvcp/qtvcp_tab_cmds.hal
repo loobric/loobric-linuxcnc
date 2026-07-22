@@ -3,7 +3,7 @@
 # This file:    ./qtvcp_tab_cmds.hal
 # Created by:   /home/bradcollette/linuxcnc/lib/hallib/basic_sim.tcl
 # With options: 
-# From inifile: /home/bradcollette/linuxcnc/configs/smooth/qtvcp/qtvcp_tab.ini
+# From inifile: /home/bradcollette/linuxcnc/configs/loobric/qtvcp/qtvcp_tab.ini
 # Halfiles:     LIB:basic_sim.tcl
 #
 # This file contains the hal commands produced by basic_sim.tcl
