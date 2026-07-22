@@ -711,7 +711,7 @@ CONFIG_TEMPLATE = """\
 
 # API key for a multi-user server. Leave blank if you don't have one yet -
 # create an account and key through the web UI, or with the Python client:
-#   pip install loobric-loobric
+#   pip install loobric-cli
 #   loobric --url "<your server url>" register      # first time only
 #   loobric --url "<your server url>" create-key
 # Leave blank against a solo-mode server.

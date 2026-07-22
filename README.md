@@ -73,9 +73,9 @@ loobric-linuxcnc init
   (a shared playground — keep nothing real there; point at your own NAS/LAN
   server for production).
 - **API key** — leave it blank if you don't have one yet. Create an account and
-  key through the web UI or the Python client (`pip install loobric-loobric`;
+  key through the web UI or the Python client (`pip install loobric-cli`;
   `loobric register` then `loobric create-key` — see
-  [loobric-loobric/docs/SANDBOX.md](https://github.com/loobric/loobric-loobric/blob/master/docs/SANDBOX.md)),
+  [loobric-cli/docs/SANDBOX.md](https://github.com/loobric/loobric-cli/blob/master/docs/SANDBOX.md)),
   then paste it into the config later. Blank is also correct for a solo-mode server.
 - **Machine name** — defaults to this box's hostname.
 - **LinuxCNC config** — auto-discovered from `~/linuxcnc/configs/`. If you have
