@@ -1,11 +1,11 @@
-# Contributing to smooth-linuxcnc
+# Contributing to loobric-linuxcnc
 
 Thanks for your interest in contributing. This is a **reference client** for
-[Smooth Core](https://github.com/loobric/smooth-core), licensed **MIT**.
+[Loobric Server](https://github.com/loobric/loobric-server), licensed **MIT**.
 
 ## No CLA — just a DCO sign-off
 
-Unlike the AGPL-licensed `smooth-core` server (which requires a Contributor
+Unlike the AGPL-licensed `loobric-server` server (which requires a Contributor
 License Agreement), the MIT-licensed client repositories do **not** require a
 CLA. Instead, we use the **Developer Certificate of Origin (DCO)**: a simple,
 per-commit statement that you wrote the patch or otherwise have the right to
